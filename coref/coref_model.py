@@ -155,8 +155,8 @@ class CorefModel:  # pylint: disable=too-many-instance-attributes
                     f" r: {s_lea[2]:<.5f}"
                 )
             print()
-
-        return (running_loss / len(docs), *s_checker.total_lea)
+        eval_score = w_lea[0] + s_lea[0]
+        return eval_score
 
     def load_weights(self,
                      path: Optional[str] = None,
@@ -281,7 +281,7 @@ class CorefModel:  # pylint: disable=too-many-instance-attributes
         docs = list(self._get_docs(self.config.train_data))
         docs_ids = list(range(len(docs)))
         avg_spans = sum(len(doc["head2span"]) for doc in docs) / len(docs)
-
+        best_val_score = 0
         for epoch in range(self.epochs_trained, self.config.train_epochs):
             self.training = True
             running_c_loss = 0.0
@@ -324,9 +324,11 @@ class CorefModel:  # pylint: disable=too-many-instance-attributes
                 )
 
             self.epochs_trained += 1
-            self.save_weights()
-            self.evaluate()
-
+            val_score = self.evaluate()
+            if val_score > best_val_score:
+                best_val_score = val_score
+                print("New best {}".format(best_val_score))
+                self.save_weights()
     # ========================================================= Private methods
 
     def _bertify(self, doc: Doc) -> torch.Tensor:
