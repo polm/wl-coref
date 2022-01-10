@@ -19,7 +19,7 @@ if [ ! -d $1 ]; then
     exit
 fi
 
-ontonotes_dir=$1/data/files/data
+ontonotes_dir=$1/data
 
 if [ ! -d $ontonotes_dir ]; then
     echo "/data/files/data not found in OntoNotes path!"
