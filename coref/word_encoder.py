@@ -20,9 +20,15 @@ class WordEncoder(torch.nn.Module):  # pylint: disable=too-many-instance-attribu
             config (Config): the configuration of the current session
         """
         super().__init__()
+        # subwords -> words
         self.attn = torch.nn.Linear(in_features=features, out_features=1)
+        # words -> [words-forward; words-backward]
+        self.lstm = torch.nn.LSTM(input_size=features,
+                                  hidden_size=features,
+                                  batch_first=True,
+                                  )
         self.dropout = torch.nn.Dropout(config.dropout_rate)
-
+        
     @property
     def device(self) -> torch.device:
         """ A workaround to get current device (which is assumed to be the
@@ -52,7 +58,9 @@ class WordEncoder(torch.nn.Module):  # pylint: disable=too-many-instance-attribu
 
         # [n_mentions, features]
         words = self._attn_scores(x, starts, ends).mm(x)
-
+        words = torch.unsqueeze(words, dim=0)
+        h_t, _ = self.lstm(words)
+        words = h_t.squeeze()
         words = self.dropout(words)
 
         return (words, self._cluster_ids(doc))
