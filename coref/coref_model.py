@@ -379,14 +379,36 @@ class CorefModel:  # pylint: disable=too-many-instance-attributes
         n_docs = len(self._get_docs(self.config.train_data))
         self.optimizers: Dict[str, torch.optim.Optimizer] = {}
         self.schedulers: Dict[str, torch.optim.lr_scheduler.LambdaLR] = {}
-
+        # Set grads to False by default
         for param in self.bert.parameters():
-            param.requires_grad = self.config.bert_finetune
+            param.requires_grad = False
 
-        if self.config.bert_finetune:
+        # Hard code only fine-tune LayerNorm from layer 20 up.
+        if self.config.bert_mini_finetune:
+            grouped_params = {'params': []}
+            for name, param in self.bert.named_parameters():
+                split_name = name.split('.')
+                if len(split_name) > 3:
+                    if int(split_name[2]) >= 20:
+                        if 'LayerNorm' in name:
+                            param.requires_grad = True
+                            grouped_params['params'].append(param)
+            self.optimizers["bert_optimizer"] = torch.optim.Adam(
+                                                [grouped_params], 
+                                                lr=self.config.bert_learning_rate)
+            self.schedulers["bert_scheduler"] = \
+                transformers.get_linear_schedule_with_warmup(
+                    self.optimizers["bert_optimizer"],
+                    n_docs, n_docs * self.config.train_epochs
+                )
+        # Fine-tune all parameters
+        elif self.config.bert_finetune:
+            for param in self.bert.parameters():
+                param.requires_grad = True
             self.optimizers["bert_optimizer"] = torch.optim.Adam(
                 self.bert.parameters(), lr=self.config.bert_learning_rate
             )
+
             self.schedulers["bert_scheduler"] = \
                 transformers.get_linear_schedule_with_warmup(
                     self.optimizers["bert_optimizer"],

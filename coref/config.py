@@ -34,6 +34,7 @@ class Config:  # pylint: disable=too-many-instance-attributes, too-few-public-me
     rough_k: int
 
     bert_finetune: bool
+    bert_mini_finetune: bool
     dropout_rate: float
     learning_rate: float
     bert_learning_rate: float
