@@ -57,7 +57,7 @@ class WordEncoder(torch.nn.Module):  # pylint: disable=too-many-instance-attribu
         ends = word_boundaries[:, 1]
 
         # [n_mentions, features]
-        words = self._attn_scores(x, starts, ends).mm(x)
+        words = self._pooler(x, starts, ends, "first").mm(x)
         words = torch.unsqueeze(words, dim=0)
         h_t, _ = self.lstm(words)
         words = h_t.squeeze()
@@ -89,13 +89,27 @@ class WordEncoder(torch.nn.Module):  # pylint: disable=too-many-instance-attribu
         attn_mask = ((attn_mask >= word_starts.unsqueeze(1))
                      * (attn_mask < word_ends.unsqueeze(1)))
         attn_mask = torch.log(attn_mask.to(torch.float))
-
         attn_scores = self.attn(bert_out).T  # [1, n_subtokens]
         attn_scores = attn_scores.expand((n_words, n_subtokens))
         attn_scores = attn_mask + attn_scores
         del attn_mask
         return torch.softmax(attn_scores, dim=1)  # [n_words, n_subtokens]
 
+    def _pooler(self,
+                bert_out: torch.Tensor,
+                word_starts: torch.Tensor,
+                word_ends: torch.Tensor,
+                mode: str = "first") -> torch.Tensor:
+        """Return a matrix that chooses the first subword for each word."""
+        n_subtokens = len(bert_out)
+        n_words = len(word_starts)
+        pooler = torch.zeros((n_words, n_subtokens)).cuda()
+        if mode == "first":
+            pooler[torch.arange(0, n_words), word_starts] = 1
+        elif mode == "last":
+            pooler[torch.arange(0, n_words), word_ends - 1] = 1
+        return pooler
+    
     def _cluster_ids(self, doc: Doc) -> torch.Tensor:
         """
         Args:
