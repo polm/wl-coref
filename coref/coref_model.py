@@ -20,7 +20,7 @@ from coref.cluster_checker import ClusterChecker
 from coref.config import Config
 from coref.const import CorefResult, Doc
 from coref.loss import CorefLoss
-from coref.pairwise_encoder import PairwiseEncoder
+from coref.pairwise_encoder import PairwiseEncoder, DistancePairwiseEncoder
 from coref.rough_scorer import RoughScorer
 from coref.span_predictor import SpanPredictor
 from coref.tokenizer_customization import TOKENIZER_FILTERS, TOKENIZER_MAPS
@@ -351,16 +351,17 @@ class CorefModel:  # pylint: disable=too-many-instance-attributes
         out, _ = self.bert(
             subwords_batches_tensor,
             attention_mask=torch.tensor(
-                attention_mask, device=self.config.device))
+                attention_mask, device=self.config.device)).values()
         del _
 
         # [n_subwords, bert_emb]
+        #input(subword_mask_tensor.shape)
         return out[subword_mask_tensor]
 
     def _build_model(self):
         self.bert, self.tokenizer = bert.load_bert(self.config)
-        self.pw = PairwiseEncoder(self.config).to(self.config.device)
-
+        # self.pw = PairwiseEncoder(self.config).to(self.config.device)
+        self.pw = DistancePairwiseEncoder(self.config).to(self.config.device)
         bert_emb = self.bert.config.hidden_size
         pair_emb = bert_emb * 3 + self.pw.shape
 

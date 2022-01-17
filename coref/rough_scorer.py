@@ -34,9 +34,7 @@ class RoughScorer(torch.nn.Module):
         pair_mask = pair_mask.unsqueeze(1) - pair_mask.unsqueeze(0)
         pair_mask = torch.log((pair_mask > 0).to(torch.float))
         pair_mask = pair_mask.to(mentions.device)
-
         bilinear_scores = self.dropout(self.bilinear(mentions)).mm(mentions.T)
-
         rough_scores = pair_mask + bilinear_scores
 
         return self._prune(rough_scores)
