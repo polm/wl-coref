@@ -21,7 +21,7 @@ class WordEncoder(torch.nn.Module):  # pylint: disable=too-many-instance-attribu
         """
         super().__init__()
         # subwords -> words
-        self.attn = torch.nn.Linear(in_features=features, out_features=1)
+        # self.attn = torch.nn.Linear(in_features=features, out_features=1)
         # words -> [words-forward; words-backward]
         self.lstm = torch.nn.LSTM(input_size=features,
                                   hidden_size=features,
@@ -33,7 +33,7 @@ class WordEncoder(torch.nn.Module):  # pylint: disable=too-many-instance-attribu
     def device(self) -> torch.device:
         """ A workaround to get current device (which is assumed to be the
         device of the first parameter of one of the submodules) """
-        return next(self.attn.parameters()).device
+        return next(self.lstm.parameters()).device
 
     def forward(self,  # type: ignore  # pylint: disable=arguments-differ  #35566 in pytorch
                 doc: Doc,
@@ -52,17 +52,17 @@ class WordEncoder(torch.nn.Module):  # pylint: disable=too-many-instance-attribu
             cluster_ids: tensor of shape [n_words], containing cluster indices
                 for each word. Non-coreferent words have cluster id of zero.
         """
-        word_boundaries = torch.tensor(doc["word2subword"], device=self.device)
-        starts = word_boundaries[:, 0]
-        ends = word_boundaries[:, 1]
+        # word_boundaries = torch.tensor(doc["word2subword"], device=self.device)
+        # starts = word_boundaries[:, 0]
+        # ends = word_boundaries[:, 1]
 
         # [n_mentions, features]
-        words = self._pooler(x, starts, ends, "first").mm(x)
-        words = torch.unsqueeze(words, dim=0)
+        # words = self._pooler(x, starts, ends, "first").mm(x)
+        # words = torch.unsqueeze(words, dim=0)
+        words = torch.unsqueeze(x, dim=0)
         h_t, _ = self.lstm(words)
         words = h_t.squeeze()
         words = self.dropout(words)
-
         return (words, self._cluster_ids(doc))
 
     def _attn_scores(self,

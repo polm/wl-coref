@@ -14,6 +14,7 @@ import numpy as np  # type: ignore
 import torch        # type: ignore
 
 from coref import CorefModel
+from thinc.api import require_gpu
 
 
 @contextmanager
@@ -72,6 +73,7 @@ if __name__ == "__main__":
               " '--warm_start' and '--weights'", file=sys.stderr)
         sys.exit(1)
 
+    require_gpu()
     seed(2020)
     model = CorefModel(args.config_file, args.experiment)
 
