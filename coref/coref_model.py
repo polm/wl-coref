@@ -7,20 +7,19 @@ import random
 import re
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-import numpy as np      # type: ignore
 import jsonlines        # type: ignore
 import toml
 import torch
 from tqdm import tqdm   # type: ignore
 import transformers     # type: ignore
 
-from coref import bert, conll, utils
+from coref import conll, utils
 from coref.anaphoricity_scorer import AnaphoricityScorer
 from coref.cluster_checker import ClusterChecker
 from coref.config import Config
 from coref.const import CorefResult, Doc
 from coref.loss import CorefLoss
-from coref.pairwise_encoder import PairwiseEncoder, DistancePairwiseEncoder
+from coref.pairwise_encoder import DistancePairwiseEncoder
 from coref.rough_scorer import RoughScorer
 from coref.span_predictor import SpanPredictor
 from coref.tokenizer_customization import TOKENIZER_FILTERS, TOKENIZER_MAPS
@@ -28,12 +27,11 @@ from coref.utils import GraphNode
 from coref.word_encoder import WordEncoder
 
 
-import spacy
-from coref.spacy_bert import get_hacky_spans
+from coref.spacy_util import _convert_to_spacy_doc, _cluster_ids
+from coref.spacy_util import _get_ground_truth, _clusterize
 from thinc.api import reduce_first
 from spacy_transformers.architectures import transformer_tok2vec_v3
-from spacy_transformers.span_getters import get_sent_spans, configure_strided_spans
-nlp = spacy.blank("en")
+from spacy_transformers.span_getters import configure_strided_spans
 
 
 class CorefModel:  # pylint: disable=too-many-instance-attributes
@@ -224,15 +222,15 @@ class CorefModel:  # pylint: disable=too-many-instance-attributes
         # words           [n_words, span_emb]
         # cluster_ids     [n_words]
         # words, cluster_ids = self.we(doc, self._bertify(doc))
-        words, cluster_ids = self.we(doc, self._spacy_encode(doc))
+        bert_words = self._bert_encode(doc)
+        words = self.we(bert_words)
+        cluster_ids = _cluster_ids(doc, self.config.device)
         # Obtain bilinear scores and leave only top-k antecedents for each word
         # top_rough_scores  [n_words, n_ants]
         # top_indices       [n_words, n_ants]
         top_rough_scores, top_indices = self.rough_scorer(words)
-
         # Get pairwise features [n_words, n_ants, n_pw_features]
         pw = self.pw(top_indices, doc)
-
         batch_size = self.config.a_scoring_batch_size
         a_scores_lst: List[torch.Tensor] = []
 
@@ -254,10 +252,9 @@ class CorefModel:  # pylint: disable=too-many-instance-attributes
 
         # coref_scores  [n_spans, n_ants]
         res.coref_scores = torch.cat(a_scores_lst, dim=0)
-
-        res.coref_y = self._get_ground_truth(
+        res.coref_y = _get_ground_truth(
             cluster_ids, top_indices, (top_rough_scores > float("-inf")))
-        res.word_clusters = self._clusterize(doc, res.coref_scores,
+        res.word_clusters = _clusterize(doc, res.coref_scores,
                                              top_indices)
         res.span_scores, res.span_y = self.sp.get_training_data(doc, words)
 
@@ -337,63 +334,19 @@ class CorefModel:  # pylint: disable=too-many-instance-attributes
                 best_val_score = val_score
                 print("New best {}".format(best_val_score))
                 self.save_weights()
-    # ========================================================= Private methods
 
-    def _bertify(self, doc: Doc) -> torch.Tensor:
-        subwords_batches = bert.get_subwords_batches(doc, self.config,
-                                                     self.tokenizer)
-
-        special_tokens = np.array([self.tokenizer.cls_token_id,
-                                   self.tokenizer.sep_token_id,
-                                   self.tokenizer.pad_token_id])
-        subword_mask = ~(np.isin(subwords_batches, special_tokens))
-
-        subwords_batches_tensor = torch.tensor(subwords_batches,
-                                               device=self.config.device,
-                                               dtype=torch.long)
-        subword_mask_tensor = torch.tensor(subword_mask,
-                                           device=self.config.device)
-
-        # Obtain bert output for selected batches only
-        attention_mask = (subwords_batches != self.tokenizer.pad_token_id)
-        out, _ = self.bert(
-            subwords_batches_tensor,
-            attention_mask=torch.tensor(
-                attention_mask, device=self.config.device)).values()
-        del _
-
-        # [n_subwords, bert_emb]
-        return out[subword_mask_tensor]
-
-    def _sentids_to_sentstarts(self, sent_ids: List[int]) -> List[int]:
-        sent_starts = [1]
-        for i in range(1, len(sent_ids)):
-            start = int(sent_ids[i] != sent_ids[i - 1])
-            sent_starts.append(start)
-        return sent_starts
-    
-    def _convert_to_spacy_doc(self, doc: Doc) -> spacy.tokens.Doc:
-        sent_starts = self._sentids_to_sentstarts(doc['sent_id'])
-        return spacy.tokens.Doc(vocab=nlp.vocab,
-                                words=doc['cased_words'], 
-                                sent_starts=sent_starts)
-
-    def _spacy_encode(self, doc: Doc):
+    def _bert_encode(self, doc: Doc):
         """Encode a single document."""
-        spacy_doc = self._convert_to_spacy_doc(doc)
+        spacy_doc = _convert_to_spacy_doc(doc)
         output, _ = self.bert([spacy_doc], 
                               is_train=False)
         output = torch.tensor(output[0]).to(self.config.device)
         return output
     
     def _build_model(self):
-        # self.bert, self.tokenizer = bert.load_bert(self.config)
-        # self.pw = PairwiseEncoder(self.config).to(self.config.device)
-        # bert_emb = self.bert.config.hidden_size
-        # FIXME hardcoding spacy-transformers RoBERTa
         self.pw = DistancePairwiseEncoder(self.config).to(self.config.device)
         self.bert = transformer_tok2vec_v3(name='roberta-large',
-                                           get_spans=configure_strided_spans(400, 400),
+                                           get_spans=configure_strided_spans(400, 350),
                                            tokenizer_config={'add_prefix_space': True},
                                            pooling=reduce_first())
         self.bert.initialize()
@@ -417,43 +370,6 @@ class CorefModel:  # pylint: disable=too-many-instance-attributes
         n_docs = len(self._get_docs(self.config.train_data))
         self.optimizers: Dict[str, torch.optim.Optimizer] = {}
         self.schedulers: Dict[str, torch.optim.lr_scheduler.LambdaLR] = {}
-        # Set grads to False by default
-        # FIXME super hack for spacy-transformer
-        # for param in self.bert.parameters():
-        #    param.requires_grad = False
-
-        # Hard code only fine-tune LayerNorm from layer 20 up.
-        if self.config.bert_mini_finetune:
-            grouped_params = {'params': []}
-            for name, param in self.bert.named_parameters():
-                split_name = name.split('.')
-                if len(split_name) > 3:
-                    if int(split_name[2]) >= 20:
-                        if 'LayerNorm' in name:
-                            param.requires_grad = True
-                            grouped_params['params'].append(param)
-            self.optimizers["bert_optimizer"] = torch.optim.Adam(
-                                                [grouped_params], 
-                                                lr=self.config.bert_learning_rate)
-            self.schedulers["bert_scheduler"] = \
-                transformers.get_linear_schedule_with_warmup(
-                    self.optimizers["bert_optimizer"],
-                    n_docs, n_docs * self.config.train_epochs
-                )
-        # Fine-tune all parameters
-        elif self.config.bert_finetune:
-            for param in self.bert.parameters():
-                param.requires_grad = True
-            self.optimizers["bert_optimizer"] = torch.optim.Adam(
-                self.bert.parameters(), lr=self.config.bert_learning_rate
-            )
-
-            self.schedulers["bert_scheduler"] = \
-                transformers.get_linear_schedule_with_warmup(
-                    self.optimizers["bert_optimizer"],
-                    n_docs, n_docs * self.config.train_epochs
-                )
-
         # Must ensure the same ordering of parameters between launches
         modules = sorted((key, value) for key, value in self.trainable.items()
                          if key != "bert")
@@ -471,30 +387,6 @@ class CorefModel:  # pylint: disable=too-many-instance-attributes
                 0, n_docs * self.config.train_epochs
             )
 
-    def _clusterize(self, doc: Doc, scores: torch.Tensor, top_indices: torch.Tensor):
-        antecedents = scores.argmax(dim=1) - 1
-        not_dummy = antecedents >= 0
-        coref_span_heads = torch.arange(0, len(scores))[not_dummy]
-        antecedents = top_indices[coref_span_heads, antecedents[not_dummy]]
-
-        nodes = [GraphNode(i) for i in range(len(doc["cased_words"]))]
-        for i, j in zip(coref_span_heads.tolist(), antecedents.tolist()):
-            nodes[i].link(nodes[j])
-            assert nodes[i] is not nodes[j]
-
-        clusters = []
-        for node in nodes:
-            if len(node.links) > 0 and not node.visited:
-                cluster = []
-                stack = [node]
-                while stack:
-                    current_node = stack.pop()
-                    current_node.visited = True
-                    cluster.append(current_node.id)
-                    stack.extend(link for link in current_node.links if not link.visited)
-                assert len(cluster) > 1
-                clusters.append(sorted(cluster))
-        return sorted(clusters)
 
     def _get_docs(self, path: str) -> List[Doc]:
         if path not in self._docs:
@@ -509,32 +401,6 @@ class CorefModel:  # pylint: disable=too-many-instance-attributes
                 with open(cache_filename, mode="wb") as cache_f:
                     pickle.dump(self._docs[path], cache_f)
         return self._docs[path]
-
-    @staticmethod
-    def _get_ground_truth(cluster_ids: torch.Tensor,
-                          top_indices: torch.Tensor,
-                          valid_pair_map: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            cluster_ids: tensor of shape [n_words], containing cluster indices
-                for each word. Non-gold words have cluster id of zero.
-            top_indices: tensor of shape [n_words, n_ants],
-                indices of antecedents of each word
-            valid_pair_map: boolean tensor of shape [n_words, n_ants],
-                whether for pair at [i, j] (i-th word and j-th word)
-                j < i is True
-
-        Returns:
-            tensor of shape [n_words, n_ants + 1] (dummy added),
-                containing 1 at position [i, j] if i-th and j-th words corefer.
-        """
-        y = cluster_ids[top_indices] * valid_pair_map  # [n_words, n_ants]
-        y[y == 0] = -1                                 # -1 for non-gold words
-        y = utils.add_dummy(y)                         # [n_words, n_cands + 1]
-        y = (y == cluster_ids.unsqueeze(1))            # True if coreferent
-        # For all rows with no gold antecedents setting dummy to True
-        y[y.sum(dim=1) == 0, 0] = True
-        return y.to(torch.float)
 
     @staticmethod
     def _load_config(config_path: str,

@@ -36,7 +36,6 @@ class WordEncoder(torch.nn.Module):  # pylint: disable=too-many-instance-attribu
         return next(self.lstm.parameters()).device
 
     def forward(self,  # type: ignore  # pylint: disable=arguments-differ  #35566 in pytorch
-                doc: Doc,
                 x: torch.Tensor,
                 ) -> Tuple[torch.Tensor, ...]:
         """
@@ -63,7 +62,7 @@ class WordEncoder(torch.nn.Module):  # pylint: disable=too-many-instance-attribu
         h_t, _ = self.lstm(words)
         words = h_t.squeeze()
         words = self.dropout(words)
-        return (words, self._cluster_ids(doc))
+        return words
 
     def _attn_scores(self,
                      bert_out: torch.Tensor,
@@ -109,22 +108,3 @@ class WordEncoder(torch.nn.Module):  # pylint: disable=too-many-instance-attribu
         elif mode == "last":
             pooler[torch.arange(0, n_words), word_ends - 1] = 1
         return pooler
-    
-    def _cluster_ids(self, doc: Doc) -> torch.Tensor:
-        """
-        Args:
-            doc: document information
-
-        Returns:
-            torch.Tensor of shape [n_word], containing cluster indices for
-                each word. Non-coreferent words have cluster id of zero.
-        """
-        word2cluster = {word_i: i
-                        for i, cluster in enumerate(doc["word_clusters"], start=1)
-                        for word_i in cluster}
-
-        return torch.tensor(
-            [word2cluster.get(word_i, 0)
-             for word_i in range(len(doc["cased_words"]))],
-            device=self.device
-        )
