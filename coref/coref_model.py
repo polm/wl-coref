@@ -27,8 +27,8 @@ from coref.utils import GraphNode
 from coref.word_encoder import WordEncoder
 
 
-from coref.spacy_util import _convert_to_spacy_doc, _cluster_ids
-from coref.spacy_util import _get_ground_truth, _clusterize
+from coref.spacy_util import _convert_to_spacy_doc, _cluster_ids, _load_config
+from coref.spacy_util import _get_ground_truth, _clusterize, _tokenize_docs
 from thinc.api import reduce_first
 from spacy_transformers.architectures import transformer_tok2vec_v3
 from spacy_transformers.span_getters import configure_strided_spans
@@ -67,11 +67,11 @@ class CorefModel:  # pylint: disable=too-many-instance-attributes
             epochs_trained (int): the number of epochs finished
                 (useful for warm start)
         """
-        self.config = CorefModel._load_config(config_path, section)
+        self.config = _load_config(config_path, section)
         self.epochs_trained = epochs_trained
         self._docs: Dict[str, List[Doc]] = {}
         self._build_model()
-        self._build_optimizers()
+        # self._build_optimizers()
         self._set_training(False)
         self._coref_criterion = CorefLoss(self.config.bce_loss_weight)
         self._span_criterion = torch.nn.CrossEntropyLoss(reduction="sum")
@@ -164,47 +164,6 @@ class CorefModel:  # pylint: disable=too-many-instance-attributes
         eval_score = w_lea[0] + s_lea[0]
         return eval_score
 
-    def load_weights(self,
-                     path: Optional[str] = None,
-                     ignore: Optional[Set[str]] = None,
-                     map_location: Optional[str] = None,
-                     noexception: bool = False) -> None:
-        """
-        Loads pretrained weights of modules saved in a file located at path.
-        If path is None, the last saved model with current configuration
-        in data_dir is loaded.
-        Assumes files are named like {configuration}_(e{epoch}_{time})*.pt.
-        """
-        if path is None:
-            pattern = rf"{self.config.section}_\(e(\d+)_[^()]*\).*\.pt"
-            files = []
-            for f in os.listdir(self.config.data_dir):
-                match_obj = re.match(pattern, f)
-                if match_obj:
-                    files.append((int(match_obj.group(1)), f))
-            if not files:
-                if noexception:
-                    print("No weights have been loaded", flush=True)
-                    return
-                raise OSError(f"No weights found in {self.config.data_dir}!")
-            _, path = sorted(files)[-1]
-            path = os.path.join(self.config.data_dir, path)
-
-        if map_location is None:
-            map_location = self.config.device
-        print(f"Loading from {path}...")
-        state_dicts = torch.load(path, map_location=map_location)
-        self.epochs_trained = state_dicts.pop("epochs_trained", 0)
-        for key, state_dict in state_dicts.items():
-            if not ignore or key not in ignore:
-                if key.endswith("_optimizer"):
-                    self.optimizers[key].load_state_dict(state_dict)
-                elif key.endswith("_scheduler"):
-                    self.schedulers[key].load_state_dict(state_dict)
-                else:
-                    self.trainable[key].load_state_dict(state_dict)
-                print(f"Loaded {key}")
-
     def run(self,  # pylint: disable=too-many-locals
             doc: Doc,
             ) -> CorefResult:
@@ -263,78 +222,6 @@ class CorefModel:  # pylint: disable=too-many-instance-attributes
 
         return res
 
-    def save_weights(self):
-        """ Saves trainable models as state dicts. """
-        to_save: List[Tuple[str, Any]] = \
-            [(key, value) for key, value in self.trainable.items()
-             if self.config.bert_finetune or key != "bert"]
-        to_save.extend(self.optimizers.items())
-        to_save.extend(self.schedulers.items())
-
-        time = datetime.strftime(datetime.now(), "%Y.%m.%d_%H.%M")
-        path = os.path.join(self.config.data_dir,
-                            f"{self.config.section}"
-                            f"_(e{self.epochs_trained}_{time}).pt")
-        savedict = {name: module.state_dict() for name, module in to_save}
-        savedict["epochs_trained"] = self.epochs_trained  # type: ignore
-        torch.save(savedict, path)
-
-    def train(self):
-        """
-        Trains all the trainable blocks in the model using the config provided.
-        """
-        docs = list(self._get_docs(self.config.train_data))
-        docs_ids = list(range(len(docs)))
-        avg_spans = sum(len(doc["head2span"]) for doc in docs) / len(docs)
-        best_val_score = 0
-        for epoch in range(self.epochs_trained, self.config.train_epochs):
-            self.training = True
-            running_c_loss = 0.0
-            running_s_loss = 0.0
-            random.shuffle(docs_ids)
-            pbar = tqdm(docs_ids, unit="docs", ncols=0)
-            for doc_id in pbar:
-                doc = docs[doc_id]
-
-                for optim in self.optimizers.values():
-                    optim.zero_grad()
-
-                res = self.run(doc)
-
-                c_loss = self._coref_criterion(res.coref_scores, res.coref_y)
-                if res.span_y:
-                    s_loss = (self._span_criterion(res.span_scores[:, :, 0], res.span_y[0])
-                              + self._span_criterion(res.span_scores[:, :, 1], res.span_y[1])) / avg_spans / 2
-                else:
-                    s_loss = torch.zeros_like(c_loss)
-
-                del res
-
-                (c_loss + s_loss).backward()
-                running_c_loss += c_loss.item()
-                running_s_loss += s_loss.item()
-
-                del c_loss, s_loss
-
-                for optim in self.optimizers.values():
-                    optim.step()
-                for scheduler in self.schedulers.values():
-                    scheduler.step()
-
-                pbar.set_description(
-                    f"Epoch {epoch + 1}:"
-                    f" {doc['document_id']:26}"
-                    f" c_loss: {running_c_loss / (pbar.n + 1):<.5f}"
-                    f" s_loss: {running_s_loss / (pbar.n + 1):<.5f}"
-                )
-
-            self.epochs_trained += 1
-            val_score = self.evaluate()
-            if val_score > best_val_score:
-                best_val_score = val_score
-                print("New best {}".format(best_val_score))
-                self.save_weights()
-
     def _bert_encode(self, doc: Doc):
         """Encode a single document."""
         spacy_doc = _convert_to_spacy_doc(doc)
@@ -365,28 +252,7 @@ class CorefModel:  # pylint: disable=too-many-instance-attributes
             "pw": self.pw, "a_scorer": self.a_scorer,
             "sp": self.sp
         }
-
-    def _build_optimizers(self):
-        n_docs = len(self._get_docs(self.config.train_data))
-        self.optimizers: Dict[str, torch.optim.Optimizer] = {}
-        self.schedulers: Dict[str, torch.optim.lr_scheduler.LambdaLR] = {}
-        # Must ensure the same ordering of parameters between launches
-        modules = sorted((key, value) for key, value in self.trainable.items()
-                         if key != "bert")
-        params = []
-        for _, module in modules:
-            for param in module.parameters():
-                param.requires_grad = True
-                params.append(param)
-
-        self.optimizers["general_optimizer"] = torch.optim.Adam(
-            params, lr=self.config.learning_rate)
-        self.schedulers["general_scheduler"] = \
-            transformers.get_linear_schedule_with_warmup(
-                self.optimizers["general_optimizer"],
-                0, n_docs * self.config.train_epochs
-            )
-
+    
 
     def _get_docs(self, path: str) -> List[Doc]:
         if path not in self._docs:
@@ -397,52 +263,12 @@ class CorefModel:  # pylint: disable=too-many-instance-attributes
                 with open(cache_filename, mode="rb") as cache_f:
                     self._docs[path] = pickle.load(cache_f)
             else:
-                self._docs[path] = self._tokenize_docs(path)
+                self._docs[path] = _tokenize_docs(path)
                 with open(cache_filename, mode="wb") as cache_f:
                     pickle.dump(self._docs[path], cache_f)
         return self._docs[path]
-
-    @staticmethod
-    def _load_config(config_path: str,
-                     section: str) -> Config:
-        config = toml.load(config_path)
-        default_section = config["DEFAULT"]
-        current_section = config[section]
-        unknown_keys = (set(current_section.keys())
-                        - set(default_section.keys()))
-        if unknown_keys:
-            raise ValueError(f"Unexpected config keys: {unknown_keys}")
-        return Config(section, **{**default_section, **current_section})
 
     def _set_training(self, value: bool):
         self._training = value
         for module in self.trainable.values():
             module.train(self._training)
-
-    def _tokenize_docs(self, path: str) -> List[Doc]:
-        print(f"Tokenizing documents at {path}...", flush=True)
-        out: List[Doc] = []
-        filter_func = TOKENIZER_FILTERS.get(self.config.bert_model,
-                                            lambda _: True)
-        token_map = TOKENIZER_MAPS.get(self.config.bert_model, {})
-        with jsonlines.open(path, mode="r") as data_f:
-            for doc in data_f:
-                doc["span_clusters"] = [[tuple(mention) for mention in cluster]
-                                   for cluster in doc["span_clusters"]]
-                word2subword = []
-                subwords = []
-                word_id = []
-                for i, word in enumerate(doc["cased_words"]):
-                    tokenized_word = (token_map[word]
-                                      if word in token_map
-                                      else self.tokenizer.tokenize(word))
-                    tokenized_word = list(filter(filter_func, tokenized_word))
-                    word2subword.append((len(subwords), len(subwords) + len(tokenized_word)))
-                    subwords.extend(tokenized_word)
-                    word_id.extend([i] * len(tokenized_word))
-                doc["word2subword"] = word2subword
-                doc["subwords"] = subwords
-                doc["word_id"] = word_id
-                out.append(doc)
-        print("Tokenization OK", flush=True)
-        return out
