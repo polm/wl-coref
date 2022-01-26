@@ -30,7 +30,6 @@ def train(
     Trains all the trainable blocks in the model using the config provided.
     """
     docs = list(model._get_docs(model.config.train_data))
-    docs = docs[:5]
     n_docs = len(docs)
     docs_ids = list(range(len(docs)))
     avg_spans = sum(len(doc["head2span"]) for doc in docs) / len(docs)
@@ -77,10 +76,10 @@ def train(
 
         model.epochs_trained += 1
         val_score = model.evaluate()
-        #if val_score > best_val_score:
-        best_val_score = val_score
-        print("New best {}".format(best_val_score))
-        save_state(model, optimizer)
+        if val_score > best_val_score:
+            best_val_score = val_score
+            print("New best {}".format(best_val_score))
+            save_state(model, optimizer)
 
 @contextmanager
 def output_running_time():
