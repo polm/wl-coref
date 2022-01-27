@@ -1,29 +1,12 @@
-""" see __init__.py """
+from typing import Dict, List
 
-from datetime import datetime
-import os
-import pickle
-import random
-import re
-from typing import Any, Dict, List, Optional, Set, Tuple
-
-import jsonlines        # type: ignore
-import toml
 import torch
-from tqdm import tqdm   # type: ignore
-import transformers     # type: ignore
 
-from coref import conll, utils
 from coref.anaphoricity_scorer import AnaphoricityScorer
-from coref.cluster_checker import ClusterChecker
-from coref.config import Config
 from coref.const import CorefResult, Doc
-from coref.loss import CorefLoss
 from coref.pairwise_encoder import DistancePairwiseEncoder
 from coref.rough_scorer import RoughScorer
 from coref.span_predictor import SpanPredictor
-from coref.tokenizer_customization import TOKENIZER_FILTERS, TOKENIZER_MAPS
-from coref.utils import GraphNode
 from coref.word_encoder import WordEncoder
 
 
@@ -34,7 +17,7 @@ from spacy_transformers.architectures import transformer_tok2vec_v3
 from spacy_transformers.span_getters import configure_strided_spans
 
 
-class CorefModel:  # pylint: disable=too-many-instance-attributes
+class CorefModel(torch.nn.Module):  # pylint: disable=too-many-instance-attributes
     """Combines all coref modules together to find coreferent spans.
 
     Attributes:
@@ -58,6 +41,7 @@ class CorefModel:  # pylint: disable=too-many-instance-attributes
                  config_path: str,
                  section: str,
                  epochs_trained: int = 0):
+        super().__init__()
         """
         A newly created model is set to evaluation mode.
 
@@ -71,24 +55,10 @@ class CorefModel:  # pylint: disable=too-many-instance-attributes
         self.epochs_trained = epochs_trained
         self._docs: Dict[str, List[Doc]] = {}
         self._build_model()
-        self._set_training(False)
 
-    @property
-    def training(self) -> bool:
-        """ Represents whether the model is in the training mode """
-        return self._training
-
-    @training.setter
-    def training(self, new_value: bool):
-        if self._training is new_value:
-            return
-        self._set_training(new_value)
-
-    # ========================================================== Public methods
-
-    def run(self,  # pylint: disable=too-many-locals
-            doc: Doc,
-            ) -> CorefResult:
+    def forward(self,  # pylint: disable=too-many-locals
+                doc: Doc,
+                ) -> CorefResult:
         """
         This is a massive method, but it made sense to me to not split it into
         several ones to let one see the data flow.
@@ -151,7 +121,7 @@ class CorefModel:  # pylint: disable=too-many-instance-attributes
                               is_train=False)
         output = torch.tensor(output[0]).to(self.config.device)
         return output
-    
+
     def _build_model(self):
         self.pw = DistancePairwiseEncoder(self.config).to(self.config.device)
         self.bert = transformer_tok2vec_v3(name='roberta-large',
@@ -166,15 +136,3 @@ class CorefModel:  # pylint: disable=too-many-instance-attributes
         self.we = WordEncoder(bert_emb, self.config).to(self.config.device)
         self.rough_scorer = RoughScorer(bert_emb, self.config).to(self.config.device)
         self.sp = SpanPredictor(bert_emb, self.config.sp_embedding_size).to(self.config.device)
-
-        self.trainable: Dict[str, torch.nn.Module] = {
-            "we": self.we,
-            "rough_scorer": self.rough_scorer,
-            "pw": self.pw, "a_scorer": self.a_scorer,
-            "sp": self.sp
-        }
-
-    def _set_training(self, value: bool):
-        self._training = value
-        for module in self.trainable.values():
-            module.train(self._training)

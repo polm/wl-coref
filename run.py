@@ -1,7 +1,3 @@
-""" Runs experiments with CorefModel.
-
-Try 'python run.py -h' for more details.
-"""
 from typing import Tuple
 
 import argparse
@@ -40,12 +36,9 @@ def train(
     coref_criterion = CorefLoss(model.config.bce_loss_weight)
     span_criterion = torch.nn.CrossEntropyLoss(reduction="sum")
     best_val_score = 0
-    # Set up optimizers
 
-    # XXX changed
     for epoch in range(model.epochs_trained, model.config.train_epochs):
-        # XXX changed
-        model.training = True
+        model.train()
         running_c_loss = 0.0
         running_s_loss = 0.0
         random.shuffle(docs_ids)
@@ -54,7 +47,7 @@ def train(
             doc = docs[doc_id]
             optimizer.zero_grad()
 
-            res = model.run(doc)
+            res = model(doc)
 
             c_loss = coref_criterion(res.coref_scores, res.coref_y)
             if res.span_y:
@@ -103,7 +96,7 @@ def evaluate(model,
         mean loss
         span-level LEA: f1, precision, recal
     """
-    model.training = False
+    model.eval()
     w_checker = ClusterChecker()
     s_checker = ClusterChecker()
     coref_criterion = CorefLoss(model.config.bce_loss_weight)
@@ -117,7 +110,7 @@ def evaluate(model,
             as (gold_f, pred_f):
         pbar = tqdm.tqdm(docs, unit="docs", ncols=0)
         for doc in pbar:
-            res = model.run(doc)
+            res = model(doc)
 
             running_loss += coref_criterion(res.coref_scores, res.coref_y).item()
 
@@ -230,18 +223,9 @@ if __name__ == "__main__":
         model.config.a_scoring_batch_size = args.batch_size
 
     if args.mode == "train":
-        modules = sorted((key, value) for key,
-                         value in model.trainable.items()
-                         if key != "bert")
-        params = []
-        for _, module in modules:
-            for param in module.parameters():
-                param.requires_grad = True
-                params.append(param)
-
         optimizer = torch.optim.Adam(
-            params, lr=model.config.learning_rate)
-        
+            model.parameters(), lr=model.config.learning_rate)
+
         if args.weights is not None or args.warm_start:
             model, optimizer = load_state(
                 model,
@@ -257,7 +241,6 @@ if __name__ == "__main__":
             model,
             path=args.weights,
             map_location="cpu",
-            ignore={"optimizer"}
         )
         evaluate(model,
                  data_split=args.data_split,

@@ -155,14 +155,13 @@ def _load_config(
 # XXX will go away and be handled by thinc
 def save_state(model, optimizer):
     """ Saves trainable models as state dicts. """
-    to_save = [(key, value) for key, value in model.trainable.items() if key != "bert"]
-    to_save.extend([('optimizer', optimizer)])
     time = datetime.strftime(datetime.now(), "%Y.%m.%d_%H.%M")
     path = os.path.join(model.config.data_dir,
                         f"{model.config.section}"
                         f"_(e{model.epochs_trained}_{time}).pt")
-    savedict = {name: module.state_dict() for name, module in to_save}
-    savedict["epochs_trained"] = model.epochs_trained  # type: ignore
+    savedict = {'model': model.state_dict(),
+                'epochs_trained': model.epochs_trained,
+                'optimizer': optimizer}
     torch.save(savedict, path)
 
 
@@ -171,7 +170,6 @@ def load_state(
     model,
     optimizer: Optional = None,
     path: Optional[str] = None,
-    ignore: Optional[Set[str]] = None,
     map_location: Optional[str] = None,
     noexception: bool = False
 ) -> None:
@@ -192,20 +190,18 @@ def load_state(
             if noexception:
                 print("No weights have been loaded", flush=True)
                 return
-            raise OSError(f"No weights found in {self.config.data_dir}!")
+            raise OSError(f"No weights found in {model.config.data_dir}!")
         _, path = sorted(files)[-1]
         path = os.path.join(model.config.data_dir, path)
 
     if map_location is None:
         map_location = self.config.device
     print(f"Loading from {path}...")
-    state_dicts = torch.load(path, map_location=map_location)
-    model.epochs_trained = state_dicts.pop("epochs_trained", 0)
-    for key, state_dict in state_dicts.items():
-        if not ignore or key not in ignore:
-            if key.endswith("optimizer"):
-                optimizers[key].load_state_dict(state_dict)
-            model.trainable[key].load_state_dict(state_dict)
+    checkpoint = torch.load(path, map_location=map_location)
+    model.load_state_dict(checkpoint['model'])
+    if optimizer:
+        optimizer.load_state_dict(checkpoint['optimizer'])
+    model.epochs_trained = checkpoint.get("epochs_trained", 0)
     return model, optimizer
 
 
