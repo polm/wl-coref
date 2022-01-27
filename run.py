@@ -19,9 +19,10 @@ import transformers     # type: ignore
 from coref import CorefModel, conll
 from coref.cluster_checker import ClusterChecker
 from coref.const import Doc
+from coref.loss import CorefLoss
 from thinc.api import require_gpu
 
-from coref.spacy_util import save_state, load_state
+from coref.spacy_util import save_state, load_state, get_docs
 
 
 def train(
@@ -31,11 +32,13 @@ def train(
     """
     Trains all the trainable blocks in the model using the config provided.
     """
-    docs = list(model._get_docs(model.config.train_data))
-    docs = docs[:10]
+    docs = list(get_docs(model.config.train_data,
+                         model.config.bert_model))
     n_docs = len(docs)
     docs_ids = list(range(len(docs)))
     avg_spans = sum(len(doc["head2span"]) for doc in docs) / len(docs)
+    coref_criterion = CorefLoss(model.config.bce_loss_weight)
+    span_criterion = torch.nn.CrossEntropyLoss(reduction="sum")
     best_val_score = 0
     # Set up optimizers
 
@@ -53,10 +56,10 @@ def train(
 
             res = model.run(doc)
 
-            c_loss = model._coref_criterion(res.coref_scores, res.coref_y)
+            c_loss = coref_criterion(res.coref_scores, res.coref_y)
             if res.span_y:
-                s_loss = (model._span_criterion(res.span_scores[:, :, 0], res.span_y[0])
-                          + model._span_criterion(res.span_scores[:, :, 1], res.span_y[1])) / avg_spans / 2
+                s_loss = (span_criterion(res.span_scores[:, :, 0], res.span_y[0])
+                          + span_criterion(res.span_scores[:, :, 1], res.span_y[1])) / avg_spans / 2
             else:
                 s_loss = torch.zeros_like(c_loss)
 
@@ -103,7 +106,9 @@ def evaluate(model,
     model.training = False
     w_checker = ClusterChecker()
     s_checker = ClusterChecker()
-    docs = model._get_docs(model.config.__dict__[f"{data_split}_data"])
+    coref_criterion = CorefLoss(model.config.bce_loss_weight)
+    docs = get_docs(model.config.__dict__[f"{data_split}_data"],
+                    model.config.bert_model)
     running_loss = 0.0
     s_correct = 0
     s_total = 0
@@ -114,7 +119,7 @@ def evaluate(model,
         for doc in pbar:
             res = model.run(doc)
 
-            running_loss += model._coref_criterion(res.coref_scores, res.coref_y).item()
+            running_loss += coref_criterion(res.coref_scores, res.coref_y).item()
 
             if res.span_y:
                 pred_starts = res.span_scores[:, :, 0].argmax(dim=1)

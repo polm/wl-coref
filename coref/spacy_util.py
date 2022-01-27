@@ -1,21 +1,24 @@
 import os
 import re
+import pickle
 
-from typing import List, Tuple, Any, Optional, Set
-from datetime import datetime
 
 import toml
 import jsonlines
 import spacy
 import torch
-
 import coref.const as const
+
+from typing import List, Tuple, Any, Optional, Set
+from datetime import datetime
+
 from coref.utils import add_dummy, GraphNode
 from coref.config import Config
 
 nlp = spacy.blank("en")
 
 
+# XXX hack to convert from this codebase to spacy-transformers
 def _sentids_to_sentstarts(
     sent_ids: List[int]
 ) -> List[int]:
@@ -29,6 +32,7 @@ def _sentids_to_sentstarts(
     return sent_starts
 
 
+# XXX hack to convert from this codebase to spacy-transformers
 def _convert_to_spacy_doc(
     doc: const.Doc
 ) -> spacy.tokens.Doc:
@@ -116,7 +120,7 @@ def _clusterize(
     return sorted(clusters)
 
 
-# XXX
+# XXX this is completely pointless at this point
 def _tokenize_docs(path: str) -> List[const.Doc]:
     """
     Since the spacy-transformers are taking over the only
@@ -148,6 +152,7 @@ def _load_config(
     return Config(section, **{**default_section, **current_section})
 
 
+# XXX will go away and be handled by thinc
 def save_state(model, optimizer):
     """ Saves trainable models as state dicts. """
     to_save = [(key, value) for key, value in model.trainable.items() if key != "bert"]
@@ -161,6 +166,7 @@ def save_state(model, optimizer):
     torch.save(savedict, path)
 
 
+# XXX will go away for and handled by thinc
 def load_state(
     model,
     optimizer: Optional = None,
@@ -201,3 +207,23 @@ def load_state(
                 optimizers[key].load_state_dict(state_dict)
             model.trainable[key].load_state_dict(state_dict)
     return model, optimizer
+
+
+# XXX will go away and replaced with a spaCy loader
+def get_docs(path: str,
+              bert_model: str) -> List[const.Doc]:
+    """
+    Either grabs jsonlines.pickle or creates it.
+    """
+    basename = os.path.basename(path)
+    model_name = bert_model.replace("/", "_")
+    # model_name = self.config.bert_model.replace("/", "_")
+    cache_filename = f"{model_name}_{basename}.pickle"
+    if os.path.exists(cache_filename):
+        with open(cache_filename, mode="rb") as cache_f:
+            docs = pickle.load(cache_f)
+    else:
+        docs = _tokenize_docs(path)
+        with open(cache_filename, mode="wb") as cache_f:
+            pickle.dump(docs, cache_f)
+    return docs

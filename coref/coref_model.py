@@ -71,10 +71,7 @@ class CorefModel:  # pylint: disable=too-many-instance-attributes
         self.epochs_trained = epochs_trained
         self._docs: Dict[str, List[Doc]] = {}
         self._build_model()
-        # self._build_optimizers()
         self._set_training(False)
-        self._coref_criterion = CorefLoss(self.config.bce_loss_weight)
-        self._span_criterion = torch.nn.CrossEntropyLoss(reduction="sum")
 
     @property
     def training(self) -> bool:
@@ -88,7 +85,6 @@ class CorefModel:  # pylint: disable=too-many-instance-attributes
         self._set_training(new_value)
 
     # ========================================================== Public methods
-
 
     def run(self,  # pylint: disable=too-many-locals
             doc: Doc,
@@ -172,26 +168,11 @@ class CorefModel:  # pylint: disable=too-many-instance-attributes
         self.sp = SpanPredictor(bert_emb, self.config.sp_embedding_size).to(self.config.device)
 
         self.trainable: Dict[str, torch.nn.Module] = {
-            # "bert": self.bert, 
             "we": self.we,
             "rough_scorer": self.rough_scorer,
             "pw": self.pw, "a_scorer": self.a_scorer,
             "sp": self.sp
         }
-
-    def _get_docs(self, path: str) -> List[Doc]:
-        if path not in self._docs:
-            basename = os.path.basename(path)
-            model_name = self.config.bert_model.replace("/", "_")
-            cache_filename = f"{model_name}_{basename}.pickle"
-            if os.path.exists(cache_filename):
-                with open(cache_filename, mode="rb") as cache_f:
-                    self._docs[path] = pickle.load(cache_f)
-            else:
-                self._docs[path] = _tokenize_docs(path)
-                with open(cache_filename, mode="wb") as cache_f:
-                    pickle.dump(self._docs[path], cache_f)
-        return self._docs[path]
 
     def _set_training(self, value: bool):
         self._training = value
