@@ -2,6 +2,7 @@
 
 Try 'python run.py -h' for more details.
 """
+from typing import Tuple
 
 import argparse
 import tqdm
@@ -15,7 +16,8 @@ import numpy as np  # type: ignore
 import torch        # type: ignore
 import transformers     # type: ignore
 
-from coref import CorefModel
+from coref import CorefModel, conll
+from coref.cluster_checker import ClusterChecker
 from coref.const import Doc
 from thinc.api import require_gpu
 
@@ -30,6 +32,7 @@ def train(
     Trains all the trainable blocks in the model using the config provided.
     """
     docs = list(model._get_docs(model.config.train_data))
+    docs = docs[:10]
     n_docs = len(docs)
     docs_ids = list(range(len(docs)))
     avg_spans = sum(len(doc["head2span"]) for doc in docs) / len(docs)
@@ -75,11 +78,88 @@ def train(
             )
 
         model.epochs_trained += 1
-        val_score = model.evaluate()
+        val_score = evaluate(model)
         if val_score > best_val_score:
             best_val_score = val_score
             print("New best {}".format(best_val_score))
             save_state(model, optimizer)
+
+
+@torch.no_grad()
+def evaluate(model,
+             data_split: str = "dev",
+             word_level_conll: bool = False
+             ) -> Tuple[float, Tuple[float, float, float]]:
+    """ Evaluates the modes on the data split provided.
+
+    Args:
+        data_split (str): one of 'dev'/'test'/'train'
+        word_level_conll (bool): if True, outputs conll files on word-level
+
+    Returns:
+        mean loss
+        span-level LEA: f1, precision, recal
+    """
+    model.training = False
+    w_checker = ClusterChecker()
+    s_checker = ClusterChecker()
+    docs = model._get_docs(model.config.__dict__[f"{data_split}_data"])
+    running_loss = 0.0
+    s_correct = 0
+    s_total = 0
+
+    with conll.open_(model.config, model.epochs_trained, data_split) \
+            as (gold_f, pred_f):
+        pbar = tqdm.tqdm(docs, unit="docs", ncols=0)
+        for doc in pbar:
+            res = model.run(doc)
+
+            running_loss += model._coref_criterion(res.coref_scores, res.coref_y).item()
+
+            if res.span_y:
+                pred_starts = res.span_scores[:, :, 0].argmax(dim=1)
+                pred_ends = res.span_scores[:, :, 1].argmax(dim=1)
+                s_correct += ((res.span_y[0] == pred_starts) * (res.span_y[1] == pred_ends)).sum().item()
+                s_total += len(pred_starts)
+
+            if word_level_conll:
+                conll.write_conll(doc,
+                                  [[(i, i + 1) for i in cluster]
+                                   for cluster in doc["word_clusters"]],
+                                  gold_f)
+                conll.write_conll(doc,
+                                  [[(i, i + 1) for i in cluster]
+                                   for cluster in res.word_clusters],
+                                  pred_f)
+            else:
+                conll.write_conll(doc, doc["span_clusters"], gold_f)
+                conll.write_conll(doc, res.span_clusters, pred_f)
+
+            w_checker.add_predictions(doc["word_clusters"], res.word_clusters)
+            w_lea = w_checker.total_lea
+
+            s_checker.add_predictions(doc["span_clusters"], res.span_clusters)
+            s_lea = s_checker.total_lea
+
+            del res
+
+            pbar.set_description(
+                f"{data_split}:"
+                f" | WL: "
+                f" loss: {running_loss / (pbar.n + 1):<.5f},"
+                f" f1: {w_lea[0]:.5f},"
+                f" p: {w_lea[1]:.5f},"
+                f" r: {w_lea[2]:<.5f}"
+                f" | SL: "
+                f" sa: {s_correct / s_total:<.5f},"
+                f" f1: {s_lea[0]:.5f},"
+                f" p: {s_lea[1]:.5f},"
+                f" r: {s_lea[2]:<.5f}"
+            )
+        print()
+    eval_score = w_lea[0] + s_lea[0]
+    return eval_score
+
 
 @contextmanager
 def output_running_time():
@@ -174,5 +254,6 @@ if __name__ == "__main__":
             map_location="cpu",
             ignore={"optimizer"}
         )
-        model.evaluate(data_split=args.data_split,
-                       word_level_conll=args.word_level)
+        evaluate(model,
+                 data_split=args.data_split,
+                 word_level_conll=args.word_level)
