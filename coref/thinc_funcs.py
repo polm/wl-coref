@@ -15,7 +15,9 @@ from spacy_transformers.span_getters import configure_strided_spans
 nlp = spacy.blank("en")
 
 
-def spaCyRoBERTa():
+def spaCyRoBERTa(
+) -> Model[spacy.tokens.Doc, List[Floats2d]]:
+    """Configures and returns RoBERTa from spacy-transformers."""
     return transformer_tok2vec_v3(
         name='roberta-large',
         get_spans=configure_strided_spans(400, 350),

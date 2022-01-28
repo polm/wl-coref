@@ -7,17 +7,12 @@ from coref.const import CorefResult, Doc
 from coref.pairwise_encoder import DistancePairwiseEncoder
 from coref.rough_scorer import RoughScorer
 from coref.span_predictor import SpanPredictor
-from coref.word_encoder import WordEncoder
+
+from coref.spacy_util import _load_config
+from coref.spacy_util import _get_ground_truth, _clusterize
 
 
-from coref.spacy_util import _convert_to_spacy_doc, _cluster_ids, _load_config
-from coref.spacy_util import _get_ground_truth, _clusterize, _tokenize_docs
-from thinc.api import reduce_first
-from spacy_transformers.architectures import transformer_tok2vec_v3
-from spacy_transformers.span_getters import configure_strided_spans
-
-
-class CorefModel(torch.nn.Module):  # pylint: disable=too-many-instance-attributes
+class CorefModel(torch.nn.Module):
     """Combines all coref modules together to find coreferent spans.
 
     Attributes:
@@ -53,12 +48,24 @@ class CorefModel(torch.nn.Module):  # pylint: disable=too-many-instance-attribut
         """
         self.config = _load_config(config_path, section)
         self.epochs_trained = epochs_trained
-        self._docs: Dict[str, List[Doc]] = {}
-        self._build_model()
+        self.pw = DistancePairwiseEncoder(self.config).to(self.config.device)
+        bert_emb = 1024
+        pair_emb = bert_emb * 3 + self.pw.shape
+        self.a_scorer = AnaphoricityScorer(pair_emb, self.config).to(self.config.device)
+        self.lstm = torch.nn.LSTM(input_size=bert_emb,
+                                  hidden_size=bert_emb,
+                                  batch_first=True,
+                                  )
+        self.dropout = torch.nn.Dropout(self.config.dropout_rate)
+        self.rough_scorer = RoughScorer(bert_emb, self.config).to(self.config.device)
+        self.sp = SpanPredictor(bert_emb, self.config.sp_embedding_size).to(self.config.device)
 
-    def forward(self,  # pylint: disable=too-many-locals
-                doc: Doc,
-                ) -> CorefResult:
+    def forward(
+        self,
+        doc: Doc,
+        word_features,
+        cluster_ids
+) -> CorefResult:
         """
         This is a massive method, but it made sense to me to not split it into
         several ones to let one see the data flow.
@@ -69,13 +76,15 @@ class CorefModel(torch.nn.Module):  # pylint: disable=too-many-instance-attribut
         Returns:
             CorefResult (see const.py)
         """
-        # Encode words with bert
         # words           [n_words, span_emb]
         # cluster_ids     [n_words]
-        # words, cluster_ids = self.we(doc, self._bertify(doc))
-        bert_words = self._bert_encode(doc)
-        words = self.we(bert_words)
-        cluster_ids = _cluster_ids(doc, self.config.device)
+        # XXX will be done with convert_inputs
+        word_features = torch.tensor(word_features)
+        word_features = torch.unsqueeze(word_features, dim=0)
+        cluster_ids = torch.tensor(cluster_ids)
+        words, _ = self.lstm(word_features)
+        words = words.squeeze()
+        words = self.dropout(words)
         # Obtain bilinear scores and leave only top-k antecedents for each word
         # top_rough_scores  [n_words, n_ants]
         # top_indices       [n_words, n_ants]
@@ -113,26 +122,3 @@ class CorefModel(torch.nn.Module):  # pylint: disable=too-many-instance-attribut
             res.span_clusters = self.sp.predict(doc, words, res.word_clusters)
 
         return res
-
-    def _bert_encode(self, doc: Doc):
-        """Encode a single document."""
-        spacy_doc = _convert_to_spacy_doc(doc)
-        output, _ = self.bert([spacy_doc], 
-                              is_train=False)
-        output = torch.tensor(output[0]).to(self.config.device)
-        return output
-
-    def _build_model(self):
-        self.pw = DistancePairwiseEncoder(self.config).to(self.config.device)
-        self.bert = transformer_tok2vec_v3(name='roberta-large',
-                                           get_spans=configure_strided_spans(400, 350),
-                                           tokenizer_config={'add_prefix_space': True},
-                                           pooling=reduce_first())
-        self.bert.initialize()
-        # pylint: disable=line-too-long
-        bert_emb = 1024
-        pair_emb = bert_emb * 3 + self.pw.shape
-        self.a_scorer = AnaphoricityScorer(pair_emb, self.config).to(self.config.device)
-        self.we = WordEncoder(bert_emb, self.config).to(self.config.device)
-        self.rough_scorer = RoughScorer(bert_emb, self.config).to(self.config.device)
-        self.sp = SpanPredictor(bert_emb, self.config.sp_embedding_size).to(self.config.device)

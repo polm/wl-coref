@@ -15,53 +15,6 @@ from datetime import datetime
 from coref.utils import add_dummy, GraphNode
 from coref.config import Config
 
-nlp = spacy.blank("en")
-
-
-# XXX hack to convert from this codebase to spacy-transformers
-def _sentids_to_sentstarts(
-    sent_ids: List[int]
-) -> List[int]:
-    """
-    Convert sentence id per token to sentence start indicators.
-    """
-    sent_starts = [1]
-    for i in range(1, len(sent_ids)):
-        start = int(sent_ids[i] != sent_ids[i - 1])
-        sent_starts.append(start)
-    return sent_starts
-
-
-# XXX hack to convert from this codebase to spacy-transformers
-def _convert_to_spacy_doc(
-    doc: const.Doc
-) -> spacy.tokens.Doc:
-    """
-    Just converts sentence-ids to sentence starts basically.
-    """
-    sent_starts = _sentids_to_sentstarts(doc['sent_id'])
-    return spacy.tokens.Doc(vocab=nlp.vocab,
-                            words=doc['cased_words'],
-                            sent_starts=sent_starts)
-
-
-def _cluster_ids(
-    doc: const.Doc, device
-) -> torch.Tensor:
-    """
-    Returns a torch.Tensor of shape [n_word], containing cluster
-    indices for each word. Non-coreferent words have cluster id of zero.
-    """
-    word2cluster = {word_i: i
-                    for i, cluster in enumerate(doc["word_clusters"], start=1)
-                    for word_i in cluster}
-
-    return torch.tensor(
-        [word2cluster.get(word_i, 0)
-         for word_i in range(len(doc["cased_words"]))],
-        device=device
-    )
-
 
 def _get_ground_truth(
     cluster_ids: torch.Tensor,
