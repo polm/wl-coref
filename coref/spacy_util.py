@@ -44,7 +44,6 @@ def _get_ground_truth(
 
 
 def _clusterize(
-        doc: const.Doc,
         scores: torch.Tensor,
         top_indices: torch.Tensor
 ):
@@ -52,8 +51,8 @@ def _clusterize(
     not_dummy = antecedents >= 0
     coref_span_heads = torch.arange(0, len(scores))[not_dummy]
     antecedents = top_indices[coref_span_heads, antecedents[not_dummy]]
-
-    nodes = [GraphNode(i) for i in range(len(doc["cased_words"]))]
+    n_words = scores.shape[0]
+    nodes = [GraphNode(i) for i in range(n_words)]
     for i, j in zip(coref_span_heads.tolist(), antecedents.tolist()):
         nodes[i].link(nodes[j])
         assert nodes[i] is not nodes[j]
@@ -106,13 +105,14 @@ def _load_config(
 
 
 # XXX will go away and be handled by thinc
-def save_state(model, optimizer):
+def save_state(model, span_predictor, optimizer):
     """ Saves trainable models as state dicts. """
     time = datetime.strftime(datetime.now(), "%Y.%m.%d_%H.%M")
     path = os.path.join(model.config.data_dir,
                         f"{model.config.section}"
                         f"_(e{model.epochs_trained}_{time}).pt")
     savedict = {'model': model.state_dict(),
+                'span_predictor': span_predictor.state_dict(),
                 'epochs_trained': model.epochs_trained,
                 'optimizer': optimizer}
     torch.save(savedict, path)
@@ -121,6 +121,7 @@ def save_state(model, optimizer):
 # XXX will go away for and handled by thinc
 def load_state(
     model,
+    span_predictor,
     optimizer: Optional = None,
     path: Optional[str] = None,
     map_location: Optional[str] = None,
@@ -152,10 +153,11 @@ def load_state(
     print(f"Loading from {path}...")
     checkpoint = torch.load(path, map_location=map_location)
     model.load_state_dict(checkpoint['model'])
+    span_predictor.load_state_dict(checkpoint['span_predictor'])
     if optimizer:
         optimizer.load_state_dict(checkpoint['optimizer'])
     model.epochs_trained = checkpoint.get("epochs_trained", 0)
-    return model, optimizer
+    return model, span_predictor, optimizer
 
 
 # XXX will go away and replaced with a spaCy loader

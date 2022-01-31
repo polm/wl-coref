@@ -32,4 +32,5 @@ def add_dummy(tensor: torch.Tensor, eps: bool = False):
         dummy = torch.zeros(shape, **kwargs)          # type: ignore
     else:
         dummy = torch.full(shape, EPSILON, **kwargs)  # type: ignore
-    return torch.cat((dummy, tensor), dim=1)
+    output = torch.cat((dummy, tensor), dim=1)
+    return output

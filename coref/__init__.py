@@ -6,8 +6,8 @@
   model.evaluate("dev")
 """
 
-from .coref_model import CorefModel
-
+from .coref_model import CorefScorer
+from .span_predictor import SpanPredictor
 
 __all__ = [
     "CorefModel"

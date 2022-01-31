@@ -39,7 +39,17 @@ def cluster_ids(
 
 def doc2doc(
 ) -> Model[const.Doc, spacy.tokens.Doc]:
+    """Convert Doc object from this library to spacy.tokens.Doc."""
     return Model('doc2doc', forward_doc2doc)
+
+
+def doc2spaninfo(
+) -> Model[const.Doc, Tuple[Ints1d, Ints1d, Ints1d]]:
+    """Convert Doc to input to the SpanResolver model."""
+    return Model(
+        'prepare_for_spanresolver',
+        forward_doc2spaninfo
+    )
 
 
 def _sentids_to_sentstarts(
@@ -88,7 +98,34 @@ def forward_doc2doc(
     return [spacy_doc], backprop
 
 
+def forward_doc2spaninfo(
+    model: Model[const.Doc,
+                 Tuple[Ints1d, Ints1d, Ints1d]],
+    doc: const.Doc,
+    is_train: bool
+) -> Tuple[Ints1d, Ints1d, Ints1d]:
+    head2span = sorted(doc["head2span"])
+
+    def backprop(dY):
+        return []
+
+    if not head2span:
+        empty = model.ops.xp.asarray([])
+        return ([], [], []), backprop
+    heads, starts, ends = zip(*head2span)
+    heads = model.ops.xp.asarray(heads)
+    starts = model.ops.xp.asarray(starts)
+    ends = model.ops.xp.asarray(ends) - 1
+
+
+    return (heads, starts, ends), backprop
+
+
 def doc2inputs(
 ) -> Model[const.Doc, Tuple[Floats2d, Ints1d]]:
+    """
+    Create pipeline that goes from Doc to RoBERTa
+    features and cluster_ids.
+    """
     encoder = chain(doc2doc(), spaCyRoBERTa())
     return tuplify(encoder, cluster_ids())

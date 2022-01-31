@@ -2,7 +2,7 @@
 sum of NLML and BCE losses. """
 
 import torch
-
+from coref.spacy_util import _get_ground_truth
 
 class CorefLoss(torch.nn.Module):
     """ See the rationale for using NLML in Lee et al. 2017
@@ -16,12 +16,27 @@ class CorefLoss(torch.nn.Module):
         self._bce_module = torch.nn.BCEWithLogitsLoss()
         self._bce_weight = bce_weight
 
-    def forward(self,    # type: ignore  # pylint: disable=arguments-differ  #35566 in pytorch
-                input_: torch.Tensor,
-                target: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        cluster_ids: torch.Tensor,
+        coref_scores: torch.Tensor,
+        coref_indices: torch.Tensor
+    ) -> torch.Tensor:
         """ Returns a weighted sum of two losses as a torch.Tensor """
-        return (self._nlml(input_, target)
-                + self._bce(input_, target) * self._bce_weight)
+        cluster_ids = torch.tensor(cluster_ids).to(coref_scores.device)
+        pair_mask = torch.arange(coref_scores.shape[0])
+        pair_mask = pair_mask.unsqueeze(1) - pair_mask.unsqueeze(0)
+        pair_mask = torch.log((pair_mask > 0).to(torch.float))
+        pair_mask = pair_mask.to(coref_scores.device)
+        pair_mask = pair_mask[:, :coref_scores.size(1) - 1]
+        target = _get_ground_truth(
+            cluster_ids,
+            coref_indices,
+            (pair_mask > float("-inf")
+             )
+        )
+        return (self._nlml(coref_scores, target)
+                + self._bce(coref_scores, target) * self._bce_weight)
 
     def _bce(self,
              input_: torch.Tensor,

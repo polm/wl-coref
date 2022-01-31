@@ -12,21 +12,15 @@ from coref.spacy_util import _load_config
 from coref.spacy_util import _get_ground_truth, _clusterize
 
 
-class CorefModel(torch.nn.Module):
+class CorefScorer(torch.nn.Module):
     """Combines all coref modules together to find coreferent spans.
 
     Attributes:
         config (coref.config.Config): the model's configuration,
             see config.toml for the details
         epochs_trained (int): number of epochs the model has been trained for
-        trainable (Dict[str, torch.nn.Module]): trainable submodules with their
-            names used as keys
-        training (bool): used to toggle train/eval modes
 
     Submodules (in the order of their usage in the pipeline):
-        tokenizer (transformers.AutoTokenizer)
-        bert (transformers.AutoModel)
-        we (WordEncoder)
         rough_scorer (RoughScorer)
         pw (PairwiseEncoder)
         a_scorer (AnaphoricityScorer)
@@ -111,14 +105,16 @@ class CorefModel(torch.nn.Module):
         res = CorefResult()
 
         # coref_scores  [n_spans, n_ants]
-        res.coref_scores = torch.cat(a_scores_lst, dim=0)
-        res.coref_y = _get_ground_truth(
-            cluster_ids, top_indices, (top_rough_scores > float("-inf")))
-        res.word_clusters = _clusterize(doc, res.coref_scores,
-                                             top_indices)
-        res.span_scores, res.span_y = self.sp.get_training_data(doc, words)
+        # res.coref_scores = torch.cat(a_scores_lst, dim=0)
+        # res.top_indices = top_indices
+        # res.coref_y = _get_ground_truth(
+        #    cluster_ids, top_indices, (top_rough_scores > float("-inf")))
+        # res.word_clusters = _clusterize(doc, res.coref_scores,
+        #                                     top_indices)
+        # res.span_scores, res.span_y = self.sp.get_training_data(doc, words)
+        coref_scores = torch.cat(a_scores_lst, dim=0)
 
         if not self.training:
             res.span_clusters = self.sp.predict(doc, words, res.word_clusters)
 
-        return res
+        return coref_scores, top_indices

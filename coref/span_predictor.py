@@ -49,11 +49,14 @@ class SpanPredictor(torch.nn.Module):
         Returns:
             torch.Tensor: span start/end scores, [n_heads, n_words, 2]
         """
+        heads_ids = torch.tensor(heads_ids).to(self.device)
+        words = torch.tensor(words).to(self.device)
         # Obtain distance embedding indices, [n_heads, n_words]
         relative_positions = (heads_ids.unsqueeze(1) - torch.arange(words.shape[0], device=words.device).unsqueeze(0))
-        emb_ids = relative_positions + 63               # make all valid distances positive
-        emb_ids[(emb_ids < 0) + (emb_ids > 126)] = 127  # "too_far"
-
+        # make all valid distances positive
+        emb_ids = relative_positions + 63
+        # "too_far"
+        emb_ids[(emb_ids < 0) + (emb_ids > 126)] = 127
         # Obtain "same sentence" boolean mask, [n_heads, n_words]
         sent_id = torch.tensor(doc["sent_id"], device=words.device)
         same_sent = (sent_id[heads_ids].unsqueeze(1) == sent_id.unsqueeze(0))
