@@ -17,12 +17,16 @@ from coref.cluster_checker import ClusterChecker
 from coref.const import Doc
 from coref.loss import CorefLoss
 from thinc.api import require_gpu
+from thinc.api import PyTorchWrapper
+from thinc.api import Adam as Tadam
+from coref.spacy_util import save_state, load_state, get_docs, _clusterize, _load_config
+from coref.thinc_funcs import doc2inputs, doc2spaninfo, convert_coref_scorer_inputs
 
-from coref.spacy_util import save_state, load_state, get_docs, _clusterize
-from coref.thinc_funcs import doc2inputs, doc2spaninfo
+from coref.thinc_loss import coref_loss
 
 
 def train(
+    config,
     model: CorefScorer,
     span_predictor: SpanPredictor,
     optimizer,
@@ -30,20 +34,22 @@ def train(
     """
     Trains all the trainable blocks in the model using the config provided.
     """
-    docs = list(get_docs(model.config.train_data,
-                         model.config.bert_model))
+    docs = list(get_docs(config.train_data,
+                         config.bert_model))
     data_provider = doc2inputs()
     span_provider = doc2spaninfo()
+    thinc_optimizer = Tadam(config.learning_rate)
     data_provider.initialize()
+    model.initialize()
     n_docs = len(docs)
     docs_ids = list(range(len(docs)))
     avg_spans = sum(len(doc["head2span"]) for doc in docs) / len(docs)
-    coref_criterion = CorefLoss(model.config.bce_loss_weight)
+    coref_criterion = CorefLoss(config.bce_loss_weight)
     span_criterion = torch.nn.CrossEntropyLoss(reduction="sum")
     best_val_score = 0
 
-    for epoch in range(model.epochs_trained, model.config.train_epochs):
-        model.train()
+    for epoch in range(model.attrs['epochs_trained'], config.train_epochs):
+        # model.train()
         span_predictor.train()
         running_c_loss = 0.0
         running_s_loss = 0.0
@@ -60,16 +66,22 @@ def train(
             ends = torch.tensor(ends).to(span_predictor.device)
             span_target = (starts, ends)
             # Run CorefScorer
-            coref_scores, top_indices = model(
-                doc,
-                word_features[0],
-                cluster_ids)
+            (coref_scores, top_indices), backprop = model.begin_update((doc, word_features[0], cluster_ids))
             # Compute coreference loss
-            c_loss = coref_criterion(
+            # c_loss = coref_criterion(
+            #    cluster_ids,
+            #    coref_scores,
+            #    top_indices
+            # )
+            c_loss, c_grads = coref_loss(
+                span_provider,
                 cluster_ids,
                 coref_scores,
-                top_indices
+                top_indices,
+                False
             )
+            backprop(c_grads)
+            model.finish_update(optimizer)
             # Run SpanPredictor
             if starts.nelement() and ends.nelement():
                 span_scores = span_predictor(
@@ -83,13 +95,12 @@ def train(
             else:
                 s_loss = torch.zeros_like(c_loss)
 
-            del coref_scores
-            del top_indices
-
             (c_loss + s_loss).backward()
             running_c_loss += c_loss.item()
             running_s_loss += s_loss.item()
 
+            del coref_scores
+            del top_indices
             del c_loss, s_loss
 
             optimizer.step()
@@ -101,7 +112,7 @@ def train(
                 f" s_loss: {running_s_loss / (pbar.n + 1):<.5f}"
             )
 
-        model.epochs_trained += 1
+        model.attrs['epochs_trained'] += 1
         val_score = evaluate(model, span_predictor)
         if val_score > best_val_score:
             best_val_score = val_score
@@ -110,11 +121,13 @@ def train(
 
 
 @torch.no_grad()
-def evaluate(model: CorefScorer,
-             span_predictor: SpanPredictor,
-             data_split: str = "dev",
-             word_level_conll: bool = False
-             ) -> Tuple[float, Tuple[float, float, float]]:
+def evaluate(
+    config,
+    model: CorefScorer,
+    span_predictor: SpanPredictor,
+    data_split: str = "dev",
+    word_level_conll: bool = False
+) -> Tuple[float, Tuple[float, float, float]]:
     """ Evaluates the modes on the data split provided.
 
     Args:
@@ -129,9 +142,9 @@ def evaluate(model: CorefScorer,
     span_predictor.eval()
     w_checker = ClusterChecker()
     s_checker = ClusterChecker()
-    coref_criterion = CorefLoss(model.config.bce_loss_weight)
-    docs = get_docs(model.config.__dict__[f"{data_split}_data"],
-                    model.config.bert_model)
+    coref_criterion = CorefLoss(config.bce_loss_weight)
+    docs = get_docs(config.__dict__[f"{data_split}_data"],
+                    config.bert_model)
     data_provider = doc2inputs()
     span_provider = doc2spaninfo()
     data_provider.initialize()
@@ -139,7 +152,7 @@ def evaluate(model: CorefScorer,
     s_correct = 0
     s_total = 0
 
-    with conll.open_(model.config, model.epochs_trained, data_split) \
+    with conll.open_(config, model.attrs['epochs_trained'], data_split) \
             as (gold_f, pred_f):
         pbar = tqdm.tqdm(docs, unit="docs", ncols=0)
         for doc in pbar:
@@ -277,17 +290,28 @@ if __name__ == "__main__":
 
     require_gpu()
     seed(2020)
-    model = CorefScorer(args.config_file, args.experiment)
+    config = _load_config(args.config_file, args.experiment)
+    model = PyTorchWrapper(
+        CorefScorer(
+            config.device,
+            config.embedding_size,
+            config.hidden_size,
+            config.n_hidden_layers,
+            config.dropout_rate,
+            config.rough_k,
+            config.a_scoring_batch_size
+        ), convert_inputs=convert_coref_scorer_inputs
+    )
     span_predictor = SpanPredictor(
         1024,
-        model.config.sp_embedding_size).to(model.config.device)
+        config.sp_embedding_size).to(config.device)
     if args.batch_size:
-        model.config.a_scoring_batch_size = args.batch_size
+        config.a_scoring_batch_size = args.batch_size
 
     if args.mode == "train":
-        parameters = list(model.parameters()) + list(span_predictor.parameters())
+        parameters = span_predictor.parameters()
         optimizer = torch.optim.Adam(
-            parameters, lr=model.config.learning_rate)
+            parameters, lr=config.learning_rate)
 
         if args.weights is not None or args.warm_start:
             model, optimizer = load_state(
@@ -297,8 +321,10 @@ if __name__ == "__main__":
                 map_location="cpu",
                 noexception=args.warm_start
             )
+        else:
+            model.attrs['epochs_trained'] = 0
         with output_running_time():
-            train(model, span_predictor, optimizer)
+            train(config, model, span_predictor, optimizer)
     else:
         load_state(
             model,
@@ -306,7 +332,8 @@ if __name__ == "__main__":
             path=args.weights,
             map_location="cpu",
         )
-        evaluate(model,
+        evaluate(config,
+                 model,
                  span_predictor,
                  data_split=args.data_split,
                  word_level_conll=args.word_level)

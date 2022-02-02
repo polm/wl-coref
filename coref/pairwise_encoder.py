@@ -78,11 +78,11 @@ class PairwiseEncoder(torch.nn.Module):
 
 class DistancePairwiseEncoder(torch.nn.Module):
     
-    def __init__(self, config: Config):
+    def __init__(self, embedding_size, dropout_rate):
         super().__init__()
-        emb_size = config.embedding_size
+        emb_size = embedding_size
         self.distance_emb = torch.nn.Embedding(9, emb_size)
-        self.dropout = torch.nn.Dropout(config.dropout_rate)
+        self.dropout = torch.nn.Dropout(dropout_rate)
         self.shape = emb_size
 
     @property

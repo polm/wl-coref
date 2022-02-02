@@ -3,16 +3,27 @@ import torch
 
 from typing import Tuple, List
 from thinc.types import Floats2d, Ints1d
-
+from thinc.util import xp2torch, torch2xp, is_torch_array
 from coref import const
 from thinc.api import Model, reduce_first, chain, tuplify
-
+from thinc.api import ArgsKwargs, torch2xp, xp2torch
 from spacy_transformers.architectures import transformer_tok2vec_v3
 from spacy_transformers.span_getters import configure_strided_spans
 
 
 # XXX this global nlp feels sketchy
 nlp = spacy.blank("en")
+
+
+def convert_coref_scorer_inputs(
+    model: Model,
+    X: Tuple[const.Doc, Floats2d, Ints1d], 
+    is_train: bool
+):
+    doc = X[0]
+    word_features = xp2torch(X[1], requires_grad=False)
+    cluster_ids = xp2torch(X[2], requires_grad=False)
+    return ArgsKwargs(args=(doc, word_features, cluster_ids), kwargs={}), lambda dX: []
 
 
 def spaCyRoBERTa(

@@ -11,17 +11,19 @@ class AnaphoricityScorer(torch.nn.Module):
     """ Calculates anaphoricity scores by passing the inputs into a FFNN """
     def __init__(self,
                  in_features: int,
-                 config: Config):
+                 hidden_size,
+                 n_hidden_layers,
+                 dropout_rate):
         super().__init__()
-        hidden_size = config.hidden_size
-        if not config.n_hidden_layers:
+        hidden_size = hidden_size
+        if not n_hidden_layers:
             hidden_size = in_features
         layers = []
-        for i in range(config.n_hidden_layers):
+        for i in range(n_hidden_layers):
             layers.extend([torch.nn.Linear(hidden_size if i else in_features,
                                            hidden_size),
                            torch.nn.LeakyReLU(),
-                           torch.nn.Dropout(config.dropout_rate)])
+                           torch.nn.Dropout(dropout_rate)])
         self.hidden = torch.nn.Sequential(*layers)
         self.out = torch.nn.Linear(hidden_size, out_features=1)
 
