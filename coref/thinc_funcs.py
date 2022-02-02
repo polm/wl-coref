@@ -26,6 +26,26 @@ def convert_coref_scorer_inputs(
     return ArgsKwargs(args=(doc, word_features, cluster_ids), kwargs={}), lambda dX: []
 
 
+def convert_coref_scorer_outputs(
+    model: Model,
+    inputs_outputs,
+    is_train: bool
+):
+    _, outputs = inputs_outputs
+    scores, indices = outputs
+    
+    def convert_for_torch_backward(dY: Floats2d) -> ArgsKwargs:
+        dY_t = xp2torch(dY)
+        return ArgsKwargs(
+            args=([scores],),
+            kwargs={"grad_tensors": [dY_t]},
+        )
+
+    scores_xp = torch2xp(scores)
+    indices_xp = torch2xp(indices)
+    return (scores_xp, indices_xp), convert_for_torch_backward
+
+
 def spaCyRoBERTa(
 ) -> Model[spacy.tokens.Doc, List[Floats2d]]:
     """Configures and returns RoBERTa from spacy-transformers."""
