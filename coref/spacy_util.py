@@ -105,59 +105,40 @@ def _load_config(
 
 
 # XXX will go away and be handled by thinc
-def save_state(model, span_predictor, optimizer):
+def save_state(model, span_predictor, config):
     """ Saves trainable models as state dicts. """
     time = datetime.strftime(datetime.now(), "%Y.%m.%d_%H.%M")
-    path = os.path.join(model.config.data_dir,
-                        f"{model.config.section}"
-                        f"_(e{model.epochs_trained}_{time}).pt")
-    savedict = {'model': model.state_dict(),
-                'span_predictor': span_predictor.state_dict(),
-                'epochs_trained': model.epochs_trained,
-                'optimizer': optimizer}
-    torch.save(savedict, path)
+    span_path = os.path.join(config.data_dir,
+                        f"span-{config.section}"
+                        f"_(e{model.attrs['epochs_trained']}_{time}).pt")
+    coref_path = os.path.join(config.data_dir,
+                        f"coref-{config.section}"
+                        f"_(e{model.attrs['epochs_trained']}_{time}).pt")
+    savedict = {'span_predictor': span_predictor.state_dict()}
+    # Save Pytorch model
+    torch.save(savedict, span_path)
+    # Save thinc model
+    model.to_disk(coref_path)
 
 
 # XXX will go away for and handled by thinc
 def load_state(
     model,
     span_predictor,
-    optimizer: Optional = None,
-    path: Optional[str] = None,
-    map_location: Optional[str] = None,
-    noexception: bool = False
-) -> None:
+    config,
+    coref_path,
+    span_path,
+):
     """
     Loads pretrained weights of modules saved in a file located at path.
     If path is None, the last saved model with current configuration
     in data_dir is loaded.
     Assumes files are named like {configuration}_(e{epoch}_{time})*.pt.
     """
-    if path is None:
-        pattern = rf"{model.config.section}_\(e(\d+)_[^()]*\).*\.pt"
-        files = []
-        for f in os.listdir(model.config.data_dir):
-            match_obj = re.match(pattern, f)
-            if match_obj:
-                files.append((int(match_obj.group(1)), f))
-        if not files:
-            if noexception:
-                print("No weights have been loaded", flush=True)
-                return
-            raise OSError(f"No weights found in {model.config.data_dir}!")
-        _, path = sorted(files)[-1]
-        path = os.path.join(model.config.data_dir, path)
-
-    if map_location is None:
-        map_location = self.config.device
-    print(f"Loading from {path}...")
-    checkpoint = torch.load(path, map_location=map_location)
-    model.load_state_dict(checkpoint['model'])
+    checkpoint = torch.load(span_path)
+    model.from_disk(coref_path)
     span_predictor.load_state_dict(checkpoint['span_predictor'])
-    if optimizer:
-        optimizer.load_state_dict(checkpoint['optimizer'])
-    model.epochs_trained = checkpoint.get("epochs_trained", 0)
-    return model, span_predictor, optimizer
+    return model, span_predictor
 
 
 # XXX will go away and replaced with a spaCy loader

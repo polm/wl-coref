@@ -44,12 +44,10 @@ def train(
     n_docs = len(docs)
     docs_ids = list(range(len(docs)))
     avg_spans = sum(len(doc["head2span"]) for doc in docs) / len(docs)
-    coref_criterion = CorefLoss(config.bce_loss_weight)
     span_criterion = torch.nn.CrossEntropyLoss(reduction="sum")
     best_val_score = 0
 
     for epoch in range(model.attrs['epochs_trained'], config.train_epochs):
-        # model.train()
         span_predictor.train()
         running_c_loss = 0.0
         running_s_loss = 0.0
@@ -66,7 +64,14 @@ def train(
             ends = torch.tensor(ends).to(span_predictor.device)
             span_target = (starts, ends)
             # Run CorefScorer
-            (coref_scores, top_indices), backprop = model.begin_update((doc, word_features[0], cluster_ids))
+            (coref_scores, top_indices), backprop = model.begin_update(
+                (
+                    doc,
+                    word_features[0],
+                    cluster_ids
+                )
+            )
+            # Compute coref loss
             c_loss, c_grads = coref_loss(
                 span_provider,
                 cluster_ids,
@@ -74,6 +79,7 @@ def train(
                 top_indices,
                 False
             )
+            # Update CorefScorer
             backprop(c_grads)
             model.finish_update(thinc_optimizer)
             # Run SpanPredictor
@@ -112,7 +118,7 @@ def train(
         if val_score > best_val_score:
             best_val_score = val_score
             print("New best {}".format(best_val_score))
-            save_state(model, span_predictor, optimizer)
+            save_state(model, span_predictor, config)
 
 
 @torch.no_grad()
@@ -123,21 +129,10 @@ def evaluate(
     data_split: str = "dev",
     word_level_conll: bool = False
 ) -> Tuple[float, Tuple[float, float, float]]:
-    """ Evaluates the modes on the data split provided.
 
-    Args:
-        data_split (str): one of 'dev'/'test'/'train'
-        word_level_conll (bool): if True, outputs conll files on word-level
-
-    Returns:
-        mean loss
-        span-level LEA: f1, precision, recal
-    """
-    # model.eval()
     span_predictor.eval()
     w_checker = ClusterChecker()
     s_checker = ClusterChecker()
-    coref_criterion = CorefLoss(config.bce_loss_weight)
     docs = get_docs(config.__dict__[f"{data_split}_data"],
                     config.bert_model)
     data_provider = doc2inputs()
@@ -261,12 +256,12 @@ if __name__ == "__main__":
     argparser.add_argument("--batch-size", type=int,
                            help="Adjust to override the config value if you're"
                                 " experiencing out-of-memory issues")
-    argparser.add_argument("--warm-start", action="store_true",
-                           help="If set, the training will resume from the"
-                                " last checkpoint saved if any. Ignored in"
-                                " evaluation modes."
-                                " Incompatible with '--weights'.")
-    argparser.add_argument("--weights",
+    argparser.add_argument("--coref-weights",
+                           help="Path to file with weights to load."
+                                " If not supplied, in 'eval' mode the latest"
+                                " weights of the experiment will be loaded;"
+                                " in 'train' mode no weights will be loaded.")
+    argparser.add_argument("--span-weights",
                            help="Path to file with weights to load."
                                 " If not supplied, in 'eval' mode the latest"
                                 " weights of the experiment will be loaded;"
@@ -277,10 +272,6 @@ if __name__ == "__main__":
                                 " 'train' mode.")
     args = argparser.parse_args()
 
-    if args.warm_start and args.weights is not None:
-        print("The following options are incompatible:"
-              " '--warm_start' and '--weights'", file=sys.stderr)
-        sys.exit(1)
 
     require_gpu()
     seed(2020)
@@ -294,7 +285,9 @@ if __name__ == "__main__":
             config.dropout_rate,
             config.rough_k,
             config.a_scoring_batch_size
-        ), convert_inputs=convert_coref_scorer_inputs, convert_outputs=convert_coref_scorer_outputs
+        ),
+        convert_inputs=convert_coref_scorer_inputs,
+        convert_outputs=convert_coref_scorer_outputs
     )
     span_predictor = SpanPredictor(
         1024,
@@ -306,25 +299,16 @@ if __name__ == "__main__":
         parameters = span_predictor.parameters()
         optimizer = torch.optim.Adam(
             parameters, lr=config.learning_rate)
-
-        if args.weights is not None or args.warm_start:
-            model, optimizer = load_state(
-                model,
-                optimzer=optimizer,
-                schedupath=args.weights,
-                map_location="cpu",
-                noexception=args.warm_start
-            )
-        else:
-            model.attrs['epochs_trained'] = 0
+        model.attrs['epochs_trained'] = 0
         with output_running_time():
             train(config, model, span_predictor, optimizer)
     else:
-        load_state(
+        model, span_predictor = load_state(
             model,
             span_predictor,
-            path=args.weights,
-            map_location="cpu",
+            config,
+            args.coref_weights,
+            args.span_weights,
         )
         evaluate(config,
                  model,
