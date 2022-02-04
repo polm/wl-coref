@@ -1,7 +1,7 @@
 from typing import Tuple, List
-from thinc.types import Ints1d, Ints2d, Floats2d, FloatsXd
+from thinc.types import Ints1d, Ints2d, Floats2d, Floats3d, FloatsXd
 from thinc.api import Model
-from thinc.util import torch2xp
+from thinc.util import to_categorical
 import coref.const as const
 from coref.utils import add_dummy, GraphNode
 
@@ -52,8 +52,11 @@ def coref_loss(
     cluster_ids: Ints1d,
     scores: Floats2d,
     top_indices: Ints2d,
-    is_train: bool
-):
+) -> Floats2d:
+    """
+    Compute the negative marginal log-likelihood loss
+    and it's gradient.
+    """
     xp = model.ops.xp
     pair_mask = xp.arange(scores.shape[0])
     pair_mask = xp.expand_dims(pair_mask, 1) - xp.expand_dims(pair_mask, 0)
@@ -64,7 +67,7 @@ def coref_loss(
         cluster_ids,
         top_indices,
         (pair_mask > float("-inf"))
-        )
+    )
     log_marg = model.ops.softmax(
         scores + xp.log(gscores),
         axis=1
@@ -73,3 +76,28 @@ def coref_loss(
     grad = log_norm - log_marg
     loss = float((grad ** 2).sum())
     return loss, grad
+
+
+def span_loss(
+    model: Model,
+    span_scores: Floats3d,
+    starts: Ints1d,
+    ends: Ints1d
+) -> Tuple[float, Floats3d]:
+    """
+    Compute the sum of categorical-cross entropy loss
+    for the span-start and span-end scores and the
+    corresponding gradient.
+    """
+    start_scores = span_scores[:, :, 0]
+    end_scores = span_scores[:, :, 1]
+    n_classes = start_scores.shape[1]
+    start_probs = model.ops.softmax(start_scores, axis=1)
+    end_probs = model.ops.softmax(end_scores, axis=1)
+    start_targets = to_categorical(starts, n_classes)
+    end_targets = to_categorical(ends, n_classes)
+    start_grads = (start_probs - start_targets)
+    end_grads = (end_probs - end_targets)
+    grads = model.ops.xp.stack((start_grads, end_grads), axis=2)
+    loss = float((grads ** 2).sum())
+    return loss, grads

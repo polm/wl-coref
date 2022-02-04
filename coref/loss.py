@@ -2,7 +2,7 @@
 sum of NLML and BCE losses. """
 
 import torch
-from coref.spacy_util import _get_ground_truth
+# from coref.spacy_util import _get_ground_truth
 
 class CorefLoss(torch.nn.Module):
     """ See the rationale for using NLML in Lee et al. 2017

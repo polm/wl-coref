@@ -8,8 +8,6 @@ from coref.pairwise_encoder import DistancePairwiseEncoder
 from coref.rough_scorer import RoughScorer
 from coref.span_predictor import SpanPredictor
 
-from coref.spacy_util import _load_config
-from coref.spacy_util import _get_ground_truth, _clusterize
 
 
 class CorefScorer(torch.nn.Module):

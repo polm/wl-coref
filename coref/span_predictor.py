@@ -3,13 +3,12 @@ head word and context embeddings.
 """
 
 from typing import List, Optional, Tuple
-
 from coref.const import Doc, Span
 import torch
 
 
 class SpanPredictor(torch.nn.Module):
-    def __init__(self, input_size: int, distance_emb_size: int):
+    def __init__(self, input_size: int, distance_emb_size: int, device):
         super().__init__()
         self.ffnn = torch.nn.Sequential(
             torch.nn.Linear(input_size * 2 + 64, input_size),
@@ -20,17 +19,12 @@ class SpanPredictor(torch.nn.Module):
             torch.nn.Dropout(0.3),
             torch.nn.Linear(256, 64),
         )
+        self.device = device
         self.conv = torch.nn.Sequential(
             torch.nn.Conv1d(64, 4, 3, 1, 1),
             torch.nn.Conv1d(4, 2, 3, 1, 1)
         )
         self.emb = torch.nn.Embedding(128, distance_emb_size) # [-63, 63] + too_far
-
-    @property
-    def device(self) -> torch.device:
-        """ A workaround to get current device (which is assumed to be the
-        device of the first parameter of one of the submodules) """
-        return next(self.ffnn.parameters()).device
 
     def forward(self,  # type: ignore  # pylint: disable=arguments-differ  #35566 in pytorch
                 doc: Doc,
@@ -49,8 +43,6 @@ class SpanPredictor(torch.nn.Module):
         Returns:
             torch.Tensor: span start/end scores, [n_heads, n_words, 2]
         """
-        heads_ids = torch.tensor(heads_ids).to(self.device)
-        words = torch.tensor(words).to(self.device)
         # Obtain distance embedding indices, [n_heads, n_words]
         relative_positions = (heads_ids.unsqueeze(1) - torch.arange(words.shape[0], device=words.device).unsqueeze(0))
         # make all valid distances positive
@@ -96,54 +88,3 @@ class SpanPredictor(torch.nn.Module):
             return scores + valid_positions
         return scores
 
-    def get_training_data(self,
-                          doc: Doc,
-                          words: torch.Tensor
-                          ) -> Tuple[Optional[torch.Tensor],
-                                     Optional[Tuple[torch.Tensor, torch.Tensor]]]:
-        """ Returns span starts/ends for gold mentions in the document. """
-        head2span = sorted(doc["head2span"])
-        if not head2span:
-            return None, None
-        heads, starts, ends = zip(*head2span)
-        heads = torch.tensor(heads, device=self.device)
-        starts = torch.tensor(starts, device=self.device)
-        ends = torch.tensor(ends, device=self.device) - 1
-        return self(doc, words, heads), (starts, ends)
-
-    def predict(self,
-                doc: Doc,
-                words: torch.Tensor,
-                clusters: List[List[int]]) -> List[List[Span]]:
-        """
-        Predicts span clusters based on the word clusters.
-
-        Args:
-            doc (Doc): the document data
-            words (torch.Tensor): [n_words, emb_size] matrix containing
-                embeddings for each of the words in the text
-            clusters (List[List[int]]): a list of clusters where each cluster
-                is a list of word indices
-
-        Returns:
-            List[List[Span]]: span clusters
-        """
-        if not clusters:
-            return []
-
-        heads_ids = torch.tensor(
-            sorted(i for cluster in clusters for i in cluster),
-            device=self.device
-        )
-
-        scores = self(doc, words, heads_ids)
-        starts = scores[:, :, 0].argmax(dim=1).tolist()
-        ends = (scores[:, :, 1].argmax(dim=1) + 1).tolist()
-
-        head2span = {
-            head: (start, end)
-            for head, start, end in zip(heads_ids.tolist(), starts, ends)
-        }
-
-        return [[head2span[head] for head in cluster]
-                for cluster in clusters]

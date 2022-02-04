@@ -46,6 +46,17 @@ def convert_coref_scorer_outputs(
     return (scores_xp, indices_xp), convert_for_torch_backward
 
 
+def convert_span_predictor_inputs(
+    model: Model,
+    X: Tuple[const.Doc, Floats2d, Ints1d], 
+    is_train: bool
+):
+    doc = X[0]
+    word_features = xp2torch(X[1], requires_grad=False)
+    head_ids = xp2torch(X[2], requires_grad=False)
+    return ArgsKwargs(args=(doc, word_features, head_ids), kwargs={}), lambda dX: []
+
+
 def spaCyRoBERTa(
 ) -> Model[spacy.tokens.Doc, List[Floats2d]]:
     """Configures and returns RoBERTa from spacy-transformers."""
@@ -141,8 +152,12 @@ def forward_doc2spaninfo(
         return []
 
     if not head2span:
-        empty = model.ops.xp.asarray([])
-        return ([], [], []), backprop
+
+        return (model.ops.xp.asarray([]),
+                model.ops.xp.asarray([]),
+                model.ops.xp.asarray([])
+                ), backprop
+
     heads, starts, ends = zip(*head2span)
     heads = model.ops.xp.asarray(heads)
     starts = model.ops.xp.asarray(starts)
@@ -160,3 +175,38 @@ def doc2inputs(
     """
     encoder = chain(doc2doc(), spaCyRoBERTa())
     return tuplify(encoder, cluster_ids())
+
+
+def predict_span_clusters(span_predictor: Model,
+                          doc: const.Doc,
+                          words: Floats2d,
+                          clusters: List[Ints1d]):
+    """
+    Predicts span clusters based on the word clusters.
+
+    Args:
+        doc (Doc): the document data
+        words (torch.Tensor): [n_words, emb_size] matrix containing
+            embeddings for each of the words in the text
+        clusters (List[List[int]]): a list of clusters where each cluster
+            is a list of word indices
+
+    Returns:
+        List[List[Span]]: span clusters
+    """
+    if not clusters:
+        return []
+
+    xp = span_predictor.ops.xp
+    heads_ids = xp.asarray(sorted(i for cluster in clusters for i in cluster))
+    scores = span_predictor.predict((doc, words, heads_ids))
+    starts = scores[:, :, 0].argmax(axis=1).tolist()
+    ends = (scores[:, :, 1].argmax(axis=1) + 1).tolist()
+
+    head2span = {
+        head: (start, end)
+        for head, start, end in zip(heads_ids.tolist(), starts, ends)
+    }
+
+    return [[head2span[head] for head in cluster]
+            for cluster in clusters]

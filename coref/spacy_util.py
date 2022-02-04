@@ -16,34 +16,8 @@ from coref.utils import add_dummy, GraphNode
 from coref.config import Config
 
 
-def _get_ground_truth(
-    cluster_ids: torch.Tensor,
-    top_indices: torch.Tensor,
-    valid_pair_map: torch.Tensor
-) -> torch.Tensor:
-    """
-    cluster_ids: tensor of shape [n_words], containing cluster indices
-        for each word. Non-gold words have cluster id of zero.
-    top_indices: tensor of shape [n_words, n_ants],
-        indices of antecedents of each word
-    valid_pair_map: boolean tensor of shape [n_words, n_ants],
-        whether for pair at [i, j] (i-th word and j-th word)
-        j < i is True
-
-    Returns:
-        tensor of shape [n_words, n_ants + 1] (dummy added),
-            containing 1 at position [i, j] if i-th and j-th words corefer.
-    """
-    y = cluster_ids[top_indices] * valid_pair_map  # [n_words, n_ants]
-    y[y == 0] = -1                                 # -1 for non-gold words
-    y = add_dummy(y)                         # [n_words, n_cands + 1]
-    y = (y == cluster_ids.unsqueeze(1))            # True if coreferent
-    # For all rows with no gold antecedents setting dummy to True
-    y[y.sum(dim=1) == 0, 0] = True
-    return y.to(torch.float)
-
-
 def _clusterize(
+        xp,
         scores: torch.Tensor,
         top_indices: torch.Tensor
 ):
@@ -104,9 +78,7 @@ def _load_config(
     return Config(section, **{**default_section, **current_section})
 
 
-# XXX will go away and be handled by thinc
 def save_state(model, span_predictor, config):
-    """ Saves trainable models as state dicts. """
     time = datetime.strftime(datetime.now(), "%Y.%m.%d_%H.%M")
     span_path = os.path.join(config.data_dir,
                         f"span-{config.section}"
@@ -114,14 +86,10 @@ def save_state(model, span_predictor, config):
     coref_path = os.path.join(config.data_dir,
                         f"coref-{config.section}"
                         f"_(e{model.attrs['epochs_trained']}_{time}).pt")
-    savedict = {'span_predictor': span_predictor.state_dict()}
-    # Save Pytorch model
-    torch.save(savedict, span_path)
-    # Save thinc model
     model.to_disk(coref_path)
+    span_predictor.to_disk(span_path)
 
 
-# XXX will go away for and handled by thinc
 def load_state(
     model,
     span_predictor,
@@ -129,15 +97,8 @@ def load_state(
     coref_path,
     span_path,
 ):
-    """
-    Loads pretrained weights of modules saved in a file located at path.
-    If path is None, the last saved model with current configuration
-    in data_dir is loaded.
-    Assumes files are named like {configuration}_(e{epoch}_{time})*.pt.
-    """
-    checkpoint = torch.load(span_path)
     model.from_disk(coref_path)
-    span_predictor.load_state_dict(checkpoint['span_predictor'])
+    span_predictor.from_disk(span_path)
     return model, span_predictor
 
 
