@@ -10,20 +10,17 @@ import time
 
 import numpy as np  # type: ignore
 import torch        # type: ignore
-import transformers     # type: ignore
 
-from coref import CorefScorer, SpanPredictor, conll
+from coref import conll
 from coref.cluster_checker import ClusterChecker
 from coref.const import Doc
-from coref.loss import CorefLoss
 from thinc.api import require_gpu
 from thinc.api import PyTorchWrapper
 from thinc.api import Adam as Tadam
-from coref.spacy_util import save_state, load_state, get_docs, _clusterize, _load_config
-from coref.thinc_funcs import doc2inputs, doc2spaninfo
-from coref.thinc_funcs import convert_coref_scorer_inputs, convert_coref_scorer_outputs
-from coref.thinc_funcs import convert_span_predictor_inputs, predict_span_clusters
-
+from coref.spacy_util import get_docs, _load_config
+from coref.thinc_funcs import doc2inputs, doc2spaninfo, configure_pytorch_modules
+from coref.thinc_funcs import _clusterize, predict_span_clusters
+from coref.thinc_funcs import load_state, save_state
 from coref.thinc_loss import coref_loss, span_loss
 
 
@@ -42,10 +39,9 @@ def train(
     coref_optimizer = Tadam(config.learning_rate)
     span_optimizer = Tadam(config.learning_rate)
     data_provider.initialize()
-    model.initialize()
+    span_provider.initialize()
     n_docs = len(docs)
     docs_ids = list(range(len(docs)))
-    avg_spans = sum(len(doc["head2span"]) for doc in docs) / len(docs)
     best_val_score = 0
 
     for epoch in range(model.attrs['epochs_trained'], config.train_epochs):
@@ -102,7 +98,6 @@ def train(
 
             del coref_scores
             del top_indices
-            del c_loss, s_loss
 
 
             pbar.set_description(
@@ -136,6 +131,7 @@ def evaluate(
     data_provider = doc2inputs()
     span_provider = doc2spaninfo()
     data_provider.initialize()
+    span_provider.initialize()
     running_loss = 0.0
     s_correct = 0
     s_total = 0
@@ -157,9 +153,9 @@ def evaluate(
                 top_indices
             )
             word_clusters = _clusterize(
-                 span_predictor.ops.xp,
-                 torch.tensor(coref_scores),
-                 torch.tensor(top_indices)
+                 span_predictor,
+                 coref_scores,
+                 top_indices
              )
             running_loss += c_loss
             if starts.size and ends.size:
@@ -270,34 +266,14 @@ if __name__ == "__main__":
                                 " 'train' mode.")
     args = argparser.parse_args()
 
+    if args.batch_size:
+        config.a_scoring_batch_size = args.batch_size
 
     require_gpu()
     seed(2020)
     config = _load_config(args.config_file, args.experiment)
-    model = PyTorchWrapper(
-        CorefScorer(
-            config.device,
-            config.embedding_size,
-            config.hidden_size,
-            config.n_hidden_layers,
-            config.dropout_rate,
-            config.rough_k,
-            config.a_scoring_batch_size
-        ),
-        convert_inputs=convert_coref_scorer_inputs,
-        convert_outputs=convert_coref_scorer_outputs
-    )
-    span_predictor = PyTorchWrapper(
-        SpanPredictor(
-            1024,
-            config.sp_embedding_size,
-            config.device
-        ),
-        convert_inputs=convert_span_predictor_inputs
-    )
-    if args.batch_size:
-        config.a_scoring_batch_size = args.batch_size
-
+    model, span_predictor = configure_pytorch_modules(config)
+    
     if args.mode == "train":
         model.attrs['epochs_trained'] = 0
         with output_running_time():
