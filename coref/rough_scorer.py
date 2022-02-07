@@ -14,16 +14,22 @@ class RoughScorer(torch.nn.Module):
     only top scoring candidates are considered on later steps to reduce
     computational complexity.
     """
-    def __init__(self, features: int, dropout_rate, rough_k):
+    def __init__(
+            self,
+            features: int, 
+            dropout_rate: float, 
+            rough_k: float
+    ):
         super().__init__()
         self.dropout = torch.nn.Dropout(dropout_rate)
         self.bilinear = torch.nn.Linear(features, features)
 
         self.k = rough_k
 
-    def forward(self,  # type: ignore  # pylint: disable=arguments-differ  #35566 in pytorch
-                mentions: torch.Tensor,
-                ) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(
+        self,  # type: ignore  # pylint: disable=arguments-differ  #35566 in pytorch
+        mentions: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Returns rough anaphoricity scores for candidates, which consist of
         the bilinear output of the current model summed with mention scores.
