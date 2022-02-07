@@ -1,13 +1,12 @@
-from typing import Dict, List
+from typing import List, Tuple
 
 import torch
 
 from coref.anaphoricity_scorer import AnaphoricityScorer
-from coref.const import CorefResult, Doc
+from coref.const import Doc
 from coref.pairwise_encoder import DistancePairwiseEncoder
 from coref.rough_scorer import RoughScorer
 from coref.span_predictor import SpanPredictor
-
 
 
 class CorefScorer(torch.nn.Module):
@@ -24,15 +23,16 @@ class CorefScorer(torch.nn.Module):
         a_scorer (AnaphoricityScorer)
         sp (SpanPredictor)
     """
-    def __init__(self,
-                 device,
-                 dist_emb_size,
-                 hidden_size,
-                 n_layers,
-                 dropout_rate,
-                 roughk,
-                 batch_size,
-                 epochs_trained: int = 0):
+    def __init__(
+        self,
+        device: str,
+        dist_emb_size: int,
+        hidden_size: int,
+        n_layers: int,
+        dropout_rate: float,
+        roughk: int,
+        batch_size: int
+    ):
         super().__init__()
         """
         A newly created model is set to evaluation mode.
@@ -44,23 +44,31 @@ class CorefScorer(torch.nn.Module):
                 (useful for warm start)
         """
         # device, dist_emb_size, hidden_size, n_layers, dropout_rate
-        self.epochs_trained = epochs_trained
         self.pw = DistancePairwiseEncoder(dist_emb_size, dropout_rate).to(device)
         bert_emb = 1024
         pair_emb = bert_emb * 3 + self.pw.shape
-        self.a_scorer = AnaphoricityScorer(pair_emb,
-                                           hidden_size,
-                                           n_layers,
-                                           dropout_rate).to(device)
-        self.lstm = torch.nn.LSTM(input_size=bert_emb,
-                                  hidden_size=bert_emb,
-                                  batch_first=True,
-                                  )
+        self.a_scorer = AnaphoricityScorer(
+            pair_emb,
+            hidden_size,
+            n_layers,
+            dropout_rate
+        ).to(device)
+        self.lstm = torch.nn.LSTM(
+            input_size=bert_emb,
+            hidden_size=bert_emb,
+            batch_first=True,
+            bidirectional=True
+        )
+        self.bottleneck = torch.nn.Linear(
+            hidden_size * 2,
+            hidden_size
+        )
         self.dropout = torch.nn.Dropout(dropout_rate)
         self.rough_scorer = RoughScorer(
             bert_emb,
             dropout_rate,
-            roughk).to(device)
+            roughk
+        ).to(device)
         self.batch_size = batch_size
 
     def forward(
@@ -68,7 +76,7 @@ class CorefScorer(torch.nn.Module):
         doc: Doc,
         word_features,
         cluster_ids
-) -> CorefResult:
+) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         This is a massive method, but it made sense to me to not split it into
         several ones to let one see the data flow.
@@ -81,12 +89,10 @@ class CorefScorer(torch.nn.Module):
         """
         # words           [n_words, span_emb]
         # cluster_ids     [n_words]
-        # XXX will be done with convert_inputs
-        word_features = torch.tensor(word_features)
         word_features = torch.unsqueeze(word_features, dim=0)
-        cluster_ids = torch.tensor(cluster_ids)
         words, _ = self.lstm(word_features)
         words = words.squeeze()
+        words = self.bottleneck(words)
         words = self.dropout(words)
         # Obtain bilinear scores and leave only top-k antecedents for each word
         # top_rough_scores  [n_words, n_ants]
