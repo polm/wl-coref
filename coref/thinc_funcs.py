@@ -2,17 +2,34 @@ import spacy
 import torch
 
 from typing import Tuple, List
-from thinc.types import Floats2d, Ints1d
+from thinc.types import Floats2d, Ints1d, Ints2d
 from thinc.util import xp2torch, torch2xp, is_torch_array
 from coref import const
-from thinc.api import Model, reduce_first, chain, tuplify
+from thinc.api import PyTorchWrapper, Model, reduce_mean, chain, tuplify
 from thinc.api import ArgsKwargs, torch2xp, xp2torch
 from spacy_transformers.architectures import transformer_tok2vec_v3
 from spacy_transformers.span_getters import configure_strided_spans
 
+from coref.coref_model import CorefScorer
+from coref.span_predictor import SpanPredictor
+
 
 # XXX this global nlp feels sketchy
 nlp = spacy.blank("en")
+
+
+class GraphNode:
+    def __init__(self, node_id: int):
+        self.id = node_id
+        self.links: Set[GraphNode] = set()
+        self.visited = False
+
+    def link(self, another: "GraphNode"):
+        self.links.add(another)
+        another.links.add(self)
+
+    def __repr__(self) -> str:
+        return str(self.id)
 
 
 def convert_coref_scorer_inputs(
@@ -64,7 +81,7 @@ def spaCyRoBERTa(
         name='roberta-large',
         get_spans=configure_strided_spans(400, 350),
         tokenizer_config={'add_prefix_space': True},
-        pooling=reduce_first()
+        pooling=reduce_mean()
     )
 
 
@@ -177,6 +194,62 @@ def doc2inputs(
     return tuplify(encoder, cluster_ids())
 
 
+def configure_pytorch_modules(config):
+    """
+    Initializes CorefScorer and SpanPredictor Pytorch modules.
+    """
+    coref_scorer = PyTorchWrapper(
+        CorefScorer(
+            config.device,
+            config.embedding_size,
+            config.hidden_size,
+            config.n_hidden_layers,
+            config.dropout_rate,
+            config.rough_k,
+            config.a_scoring_batch_size
+        ),
+        convert_inputs=convert_coref_scorer_inputs,
+        convert_outputs=convert_coref_scorer_outputs
+    )
+    span_predictor = PyTorchWrapper(
+        SpanPredictor(
+            1024,
+            config.sp_embedding_size,
+            config.device
+        ),
+        convert_inputs=convert_span_predictor_inputs
+    )
+    coref_scorer.initialize()
+    span_predictor.initialize()
+    return coref_scorer, span_predictor
+
+
+def save_state(model, span_predictor, config):
+    """Serialize CorefScorer and SpanPredictor."""
+    time = datetime.strftime(datetime.now(), "%Y.%m.%d_%H.%M")
+    span_path = os.path.join(config.data_dir,
+                        f"span-{config.section}"
+                        f"_(e{model.attrs['epochs_trained']}_{time}).pt")
+    coref_path = os.path.join(config.data_dir,
+                        f"coref-{config.section}"
+                        f"_(e{model.attrs['epochs_trained']}_{time}).pt")
+    model.to_disk(coref_path)
+    span_predictor.to_disk(span_path)
+
+
+def load_state(
+    model,
+    span_predictor,
+    config,
+    coref_path,
+    span_path,
+):
+    """Deserialize CorefScorer and SpanPredictor."""
+    model.from_disk(coref_path)
+    span_predictor.from_disk(span_path)
+    return model, span_predictor
+
+
 def predict_span_clusters(span_predictor: Model,
                           doc: const.Doc,
                           words: Floats2d,
@@ -210,3 +283,34 @@ def predict_span_clusters(span_predictor: Model,
 
     return [[head2span[head] for head in cluster]
             for cluster in clusters]
+
+
+def _clusterize(
+        model,
+        scores: Floats2d,
+        top_indices: Ints2d
+):
+    xp = model.ops.xp
+    antecedents = scores.argmax(axis=1) - 1
+    not_dummy = antecedents >= 0
+    coref_span_heads = xp.arange(0, len(scores))[not_dummy]
+    antecedents = top_indices[coref_span_heads, antecedents[not_dummy]]
+    n_words = scores.shape[0]
+    nodes = [GraphNode(i) for i in range(n_words)]
+    for i, j in zip(coref_span_heads.tolist(), antecedents.tolist()):
+        nodes[i].link(nodes[j])
+        assert nodes[i] is not nodes[j]
+
+    clusters = []
+    for node in nodes:
+        if len(node.links) > 0 and not node.visited:
+            cluster = []
+            stack = [node]
+            while stack:
+                current_node = stack.pop()
+                current_node.visited = True
+                cluster.append(current_node.id)
+                stack.extend(link for link in current_node.links if not link.visited)
+            assert len(cluster) > 1
+            clusters.append(sorted(cluster))
+    return sorted(clusters)
