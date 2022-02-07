@@ -87,4 +87,3 @@ class SpanPredictor(torch.nn.Module):
             valid_positions = torch.stack((valid_starts, valid_ends), dim=2)
             return scores + valid_positions
         return scores
-
