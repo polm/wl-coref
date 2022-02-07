@@ -73,19 +73,16 @@ class CorefScorer(torch.nn.Module):
 
     def forward(
         self,
-        doc: Doc,
-        word_features,
-        cluster_ids
+        word_features: torch.Tensor
 ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         This is a massive method, but it made sense to me to not split it into
         several ones to let one see the data flow.
 
         Args:
-            doc (Doc): a dictionary with the document data.
-
+            word_features: torch.Tensor containing word encodings
         Returns:
-            CorefResult (see const.py)
+            coreference scores and top indices
         """
         # words           [n_words, span_emb]
         # cluster_ids     [n_words]
@@ -99,7 +96,7 @@ class CorefScorer(torch.nn.Module):
         # top_indices       [n_words, n_ants]
         top_rough_scores, top_indices = self.rough_scorer(words)
         # Get pairwise features [n_words, n_ants, n_pw_features]
-        pw = self.pw(top_indices, doc)
+        pw = self.pw(top_indices)
         batch_size = self.batch_size 
         a_scores_lst: List[torch.Tensor] = []
 

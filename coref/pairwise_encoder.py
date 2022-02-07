@@ -24,9 +24,9 @@ class DistancePairwiseEncoder(torch.nn.Module):
     
 
     def forward(self,  # type: ignore  # pylint: disable=arguments-differ  #35566 in pytorch
-                top_indices: torch.Tensor,
-                doc: Doc) -> torch.Tensor:
-        word_ids = torch.arange(0, len(doc["cased_words"]), device=self.device)
+                top_indices: torch.Tensor
+        ) -> torch.Tensor:
+        word_ids = torch.arange(0, top_indices.size(0), device=self.device)
         distance = (word_ids.unsqueeze(1) - word_ids[top_indices]
                     ).clamp_min_(min=1)
         log_distance = distance.to(torch.float).log2().floor_()

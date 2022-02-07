@@ -34,13 +34,11 @@ class GraphNode:
 
 def convert_coref_scorer_inputs(
     model: Model,
-    X: Tuple[const.Doc, Floats2d, Ints1d], 
+    X: Floats2d,
     is_train: bool
 ):
-    doc = X[0]
-    word_features = xp2torch(X[1], requires_grad=False)
-    cluster_ids = xp2torch(X[2], requires_grad=False)
-    return ArgsKwargs(args=(doc, word_features, cluster_ids), kwargs={}), lambda dX: []
+    word_features = xp2torch(X, requires_grad=False)
+    return ArgsKwargs(args=(word_features, ), kwargs={}), lambda dX: []
 
 
 def convert_coref_scorer_outputs(

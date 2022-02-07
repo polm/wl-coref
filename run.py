@@ -26,8 +26,8 @@ from coref.thinc_loss import coref_loss, span_loss
 
 def train(
     config,
-    model: CorefScorer,
-    span_predictor: SpanPredictor,
+    model,
+    span_predictor,
 ):
     """
     Trains all the trainable blocks in the model using the config provided.
@@ -54,13 +54,7 @@ def train(
             # Get data for CorefScorer
             (word_features, cluster_ids), _ = data_provider(doc, False)
             # Run CorefScorer
-            (coref_scores, top_indices), backprop = model.begin_update(
-                (
-                    doc,
-                    word_features[0],
-                    cluster_ids
-                )
-            )
+            (coref_scores, top_indices), backprop = model.begin_update(word_features[0])
             # Compute coref loss
             c_loss, c_grads = coref_loss(
                 model,
@@ -118,8 +112,8 @@ def train(
 @torch.no_grad()
 def evaluate(
     config,
-    model: CorefScorer,
-    span_predictor: SpanPredictor,
+    model,
+    span_predictor,
     data_split: str = "dev",
     word_level_conll: bool = False
 ) -> Tuple[float, Tuple[float, float, float]]:
@@ -144,7 +138,7 @@ def evaluate(
             # Get data for SpanPredictor
             (heads, starts, ends), _ = span_provider(doc, False)
             # Run CorefScorer
-            coref_scores, top_indices = model.predict((doc, word_features[0], cluster_ids))
+            coref_scores, top_indices = model.predict(word_features[0])
             # Compute coreference loss
             c_loss, c_grads = coref_loss(
                 span_provider,
