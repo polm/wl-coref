@@ -57,8 +57,8 @@ def _get_cluster_id(token: Token):
     For training we use the 0-th "empty" cluster for
     negative labels and shift the cluster ids by + 1.
     """
-    cluster_id = token.coref_cluster
-    if cluster_id:
+    cluster_id = token._.coref_cluster_i
+    if cluster_id is not None:
         return cluster_id + 1
     else:
         return 0
@@ -100,7 +100,7 @@ def load_spacy_data(path):
         DocBin(
             store_user_data=True
         ).from_disk(
-            'development.spacy'
+            path
         ).get_docs(
             nlp.vocab
         )
@@ -110,20 +110,20 @@ def load_spacy_data(path):
 # Book keeping ids for OntoNotes ConLL evaluation
 Doc.set_extension("document_id", default=None)
 Doc.set_extension("part_id", default=None)
-Doc.set_extension("", default=None)
+Doc.set_extension("coref_head2span", default=None)
 # Used for sentence-level masking for SpanPredictor
 Token.set_extension('sent_i', default=None)
 # Mention clusters on word-level (span heads)
 Token.set_extension('coref_cluster_i', default=None)
-Token.set_extension('_cluster_id', getter=_get_cluster_id)
+Token.set_extension('cluster_id', getter=_get_cluster_id)
 Doc.set_extension(
-    "coref_word_clusters",
+    "word_clusters",
     getter=_get_word_clusters,
 )
 # Mention clusters on span-level
 Span.set_extension('coref_cluster_i', default=None)
 Doc.set_extension(
-    "coref_span_clusters",
+    "coref_clusters",
     getter=_get_span_clusters,
 )
 
@@ -144,6 +144,7 @@ if __name__ == "__main__":
                 )
                 spacy_doc._.document_id = doc['document_id']
                 spacy_doc._.part_id = doc['part_id']
+                spacy_doc._.coref_head2span = doc['head2span']
                 assert len(spacy_doc) == len(doc['sent_id'])
                 for i, token in enumerate(spacy_doc):
                     token = spacy_doc[i]
@@ -164,4 +165,6 @@ if __name__ == "__main__":
                     spans=mention_spans
                 )
                 doc_bin.add(spacy_doc)
+            if split == "development":
+                split = 'dev'
             doc_bin.to_disk("{}.spacy".format(split))

@@ -27,7 +27,7 @@ class SpanPredictor(torch.nn.Module):
         self.emb = torch.nn.Embedding(128, distance_emb_size) # [-63, 63] + too_far
 
     def forward(self,  # type: ignore  # pylint: disable=arguments-differ  #35566 in pytorch
-                doc: Doc,
+                sent_id,
                 words: torch.Tensor,
                 heads_ids: torch.Tensor) -> torch.Tensor:
         """
@@ -50,7 +50,7 @@ class SpanPredictor(torch.nn.Module):
         # "too_far"
         emb_ids[(emb_ids < 0) + (emb_ids > 126)] = 127
         # Obtain "same sentence" boolean mask, [n_heads, n_words]
-        sent_id = torch.tensor(doc["sent_id"], device=words.device)
+        sent_id = torch.tensor(sent_id, device=words.device)
         same_sent = (sent_id[heads_ids].unsqueeze(1) == sent_id.unsqueeze(0))
 
         # To save memory, only pass candidates from one sentence for each head

@@ -13,15 +13,15 @@ import torch        # type: ignore
 
 from coref import conll
 from coref.cluster_checker import ClusterChecker
-from coref.const import Doc
 from thinc.api import require_gpu
-from thinc.api import PyTorchWrapper
 from thinc.api import Adam as Tadam
 from coref.spacy_util import get_docs, _load_config
-from coref.thinc_funcs import doc2inputs, doc2spaninfo, configure_pytorch_modules
+from coref.thinc_funcs import configure_pytorch_modules, doc2tensors
+from coref.thinc_funcs import spaCyRoBERTa
 from coref.thinc_funcs import _clusterize, predict_span_clusters
 from coref.thinc_funcs import load_state, save_state
 from coref.thinc_loss import coref_loss, span_loss
+from convert_to_spacy import load_spacy_data
 
 
 def train(
@@ -32,17 +32,13 @@ def train(
     """
     Trains all the trainable blocks in the model using the config provided.
     """
-    docs = list(get_docs(config.train_data,
-                         config.bert_model))
-    data_provider = doc2inputs()
-    span_provider = doc2spaninfo()
+    docs = load_spacy_data('train.spacy')
     coref_optimizer = Tadam(config.learning_rate)
     span_optimizer = Tadam(config.learning_rate)
-    data_provider.initialize()
-    span_provider.initialize()
-    n_docs = len(docs)
     docs_ids = list(range(len(docs)))
     best_val_score = 0
+    encoder = spaCyRoBERTa()
+    encoder.initialize()
 
     for epoch in range(model.attrs['epochs_trained'], config.train_epochs):
         running_c_loss = 0.0
@@ -52,9 +48,15 @@ def train(
         for doc_id in pbar:
             doc = docs[doc_id]
             # Get data for CorefScorer
-            (word_features, cluster_ids), _ = data_provider(doc, False)
+            sent_ids, cluster_ids, heads, starts, ends = doc2tensors(
+                model.ops.xp,
+                doc
+            )
+            word_features, _ = encoder([doc], False)
             # Run CorefScorer
-            (coref_scores, top_indices), backprop = model.begin_update(word_features[0])
+            (coref_scores, top_indices), backprop = model.begin_update(
+                word_features[0]
+            )
             # Compute coref loss
             c_loss, c_grads = coref_loss(
                 model,
@@ -66,11 +68,11 @@ def train(
             backprop(c_grads)
             model.finish_update(coref_optimizer)
             # Get data for SpanPredictor
-            (heads, starts, ends), _ = span_provider(doc, False)
+            # (heads, starts, ends), _ = span_provider(doc, False)
             if starts.size and ends.size:
                 span_scores, backprop_span = span_predictor.begin_update(
                     (
-                        doc,
+                        sent_ids,
                         word_features[0],
                         heads
                     )
@@ -93,10 +95,9 @@ def train(
             del coref_scores
             del top_indices
 
-
             pbar.set_description(
                 f"Epoch {epoch + 1}:"
-                f" {doc['document_id']:26}"
+                f" {doc._.document_id:26}"
                 f" c_loss: {running_c_loss / (pbar.n + 1):<.5f}"
                 f" s_loss: {running_s_loss / (pbar.n + 1):<.5f}"
             )
@@ -122,10 +123,9 @@ def evaluate(
     s_checker = ClusterChecker()
     docs = get_docs(config.__dict__[f"{data_split}_data"],
                     config.bert_model)
-    data_provider = doc2inputs()
-    span_provider = doc2spaninfo()
-    data_provider.initialize()
-    span_provider.initialize()
+    encoder = spaCyRoBERTa()
+    encoder.initialize()
+    spacy_docs = load_spacy_data('dev.spacy')
     running_loss = 0.0
     s_correct = 0
     s_total = 0
@@ -133,15 +133,19 @@ def evaluate(
     with conll.open_(config, model.attrs['epochs_trained'], data_split) \
             as (gold_f, pred_f):
         pbar = tqdm.tqdm(docs, unit="docs", ncols=0)
-        for doc in pbar:
-            (word_features, cluster_ids), _ = data_provider(doc, False)
+        for i, doc in enumerate(pbar):
+            spacy_doc = spacy_docs[i]
+            sent_ids, cluster_ids, heads, starts, ends = doc2tensors(
+                model.ops.xp,
+                spacy_doc
+            )
+            word_features, _ = encoder([spacy_doc], False)
             # Get data for SpanPredictor
-            (heads, starts, ends), _ = span_provider(doc, False)
             # Run CorefScorer
             coref_scores, top_indices = model.predict(word_features[0])
             # Compute coreference loss
             c_loss, c_grads = coref_loss(
-                span_provider,
+                model,
                 cluster_ids,
                 coref_scores,
                 top_indices
@@ -155,14 +159,14 @@ def evaluate(
             if starts.size and ends.size:
                 span_scores = span_predictor.predict(
                     (
-                        doc,
+                        sent_ids,
                         word_features[0],
                         heads
                     )
                 )
                 span_clusters = predict_span_clusters(
                     span_predictor,
-                    doc,
+                    sent_ids,
                     word_features[0],
                     word_clusters
                 )
@@ -174,7 +178,7 @@ def evaluate(
             if word_level_conll:
                 conll.write_conll(doc,
                                   [[(i, i + 1) for i in cluster]
-                                   for cluster in doc["word_clusters"]],
+                                   for cluster in spacy_doc["word_clusters"]],
                                   gold_f)
                 conll.write_conll(doc,
                                   [[(i, i + 1) for i in cluster]
@@ -184,10 +188,10 @@ def evaluate(
                 conll.write_conll(doc, doc["span_clusters"], gold_f)
                 conll.write_conll(doc, span_clusters, pred_f)
 
-            w_checker.add_predictions(doc["word_clusters"], word_clusters)
+            w_checker.add_predictions(spacy_doc._.word_clusters, word_clusters)
             w_lea = w_checker.total_lea
 
-            s_checker.add_predictions(doc["span_clusters"], span_clusters)
+            s_checker.add_predictions(spacy_doc._.coref_clusters, span_clusters)
             s_lea = s_checker.total_lea
 
 

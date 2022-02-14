@@ -1,35 +1,25 @@
+import os
 import spacy
 import torch
 
-from typing import Tuple, List
+from datetime import datetime
+from typing import Tuple, List, Set
+
 from thinc.types import Floats2d, Ints1d, Ints2d
-from thinc.util import xp2torch, torch2xp, is_torch_array
+from thinc.util import xp2torch, torch2xp
 from coref import const
 from thinc.api import PyTorchWrapper, Model, reduce_mean, chain, tuplify
-from thinc.api import ArgsKwargs, torch2xp, xp2torch
+from thinc.api import ArgsKwargs
 from spacy_transformers.architectures import transformer_tok2vec_v3
 from spacy_transformers.span_getters import configure_strided_spans
 
+from coref.utils import GraphNode
 from coref.coref_model import CorefScorer
 from coref.span_predictor import SpanPredictor
 
 
 # XXX this global nlp feels sketchy
 nlp = spacy.blank("en")
-
-
-class GraphNode:
-    def __init__(self, node_id: int):
-        self.id = node_id
-        self.links: Set[GraphNode] = set()
-        self.visited = False
-
-    def link(self, another: "GraphNode"):
-        self.links.add(another)
-        another.links.add(self)
-
-    def __repr__(self) -> str:
-        return str(self.id)
 
 
 def convert_coref_scorer_inputs(
@@ -48,7 +38,7 @@ def convert_coref_scorer_outputs(
 ):
     _, outputs = inputs_outputs
     scores, indices = outputs
-    
+
     def convert_for_torch_backward(dY: Floats2d) -> ArgsKwargs:
         dY_t = xp2torch(dY)
         return ArgsKwargs(
@@ -63,13 +53,14 @@ def convert_coref_scorer_outputs(
 
 def convert_span_predictor_inputs(
     model: Model,
-    X: Tuple[const.Doc, Floats2d, Ints1d], 
+    X: Tuple[const.Doc, Floats2d, Ints1d],
     is_train: bool
 ):
-    doc = X[0]
+    sent_id = xp2torch(X[0], requires_grad=False)
     word_features = xp2torch(X[1], requires_grad=False)
     head_ids = xp2torch(X[2], requires_grad=False)
-    return ArgsKwargs(args=(doc, word_features, head_ids), kwargs={}), lambda dX: []
+    argskwargs = ArgsKwargs(args=(sent_id, word_features, head_ids), kwargs={})
+    return argskwargs, lambda dX: []
 
 
 def spaCyRoBERTa(
@@ -185,11 +176,31 @@ def forward_doc2spaninfo(
 def doc2inputs(
 ) -> Model[const.Doc, Tuple[Floats2d, Ints1d]]:
     """
-    Create pipeline that goes from Doc to RoBERTa
-    features and cluster_ids.
-    """
+#    Create pipeline that goes from Doc to RoBERTa
+#    features and cluster_ids.
+#    """
     encoder = chain(doc2doc(), spaCyRoBERTa())
     return tuplify(encoder, cluster_ids())
+
+
+def doc2tensors(
+    xp,
+    doc: spacy.tokens.Doc
+) -> Tuple[Ints1d, Ints1d, Ints1d, Ints1d, Ints1d]:
+    sent_ids = [token._.sent_i for token in doc]
+    cluster_ids = [token._.cluster_id for token in doc]
+    head2span = sorted(doc._.coref_head2span)
+
+    if not head2span:
+        heads, starts, ends = [], [], []
+    else:
+        heads, starts, ends = zip(*head2span)
+    sent_ids = xp.asarray(sent_ids)
+    cluster_ids = xp.asarray(cluster_ids)
+    heads = xp.asarray(heads)
+    starts = xp.asarray(starts)
+    ends = xp.asarray(ends) - 1
+    return sent_ids, cluster_ids, heads, starts, ends
 
 
 def configure_pytorch_modules(config):
@@ -225,9 +236,11 @@ def configure_pytorch_modules(config):
 def save_state(model, span_predictor, config):
     """Serialize CorefScorer and SpanPredictor."""
     time = datetime.strftime(datetime.now(), "%Y.%m.%d_%H.%M")
-    span_path = os.path.join(config.data_dir,
-                        f"span-{config.section}"
-                        f"_(e{model.attrs['epochs_trained']}_{time}).pt")
+    span_path = os.path.join(
+        config.data_dir,
+        f"span-{config.section}"
+        f"_(e{model.attrs['epochs_trained']}_{time}).pt"
+    )
     coref_path = os.path.join(config.data_dir,
                         f"coref-{config.section}"
                         f"_(e{model.attrs['epochs_trained']}_{time}).pt")
@@ -249,7 +262,7 @@ def load_state(
 
 
 def predict_span_clusters(span_predictor: Model,
-                          doc: const.Doc,
+                          sent_ids: Ints1d,
                           words: Floats2d,
                           clusters: List[Ints1d]):
     """
@@ -270,7 +283,7 @@ def predict_span_clusters(span_predictor: Model,
 
     xp = span_predictor.ops.xp
     heads_ids = xp.asarray(sorted(i for cluster in clusters for i in cluster))
-    scores = span_predictor.predict((doc, words, heads_ids))
+    scores = span_predictor.predict((sent_ids, words, heads_ids))
     starts = scores[:, :, 0].argmax(axis=1).tolist()
     ends = (scores[:, :, 1].argmax(axis=1) + 1).tolist()
 
