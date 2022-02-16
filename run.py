@@ -5,7 +5,6 @@ import tqdm
 from contextlib import contextmanager
 import datetime
 import random
-import sys
 import time
 
 import numpy as np  # type: ignore
@@ -13,9 +12,10 @@ import torch        # type: ignore
 
 from coref import conll
 from coref.cluster_checker import ClusterChecker
+from coval import Evaluator, get_cluster_info, b_cubed, muc, ceafe, lea
 from thinc.api import require_gpu
 from thinc.api import Adam as Tadam
-from coref.spacy_util import get_docs, _load_config
+from coref.spacy_util import _load_config
 from coref.thinc_funcs import configure_pytorch_modules, doc2tensors
 from coref.thinc_funcs import spaCyRoBERTa
 from coref.thinc_funcs import _clusterize, predict_span_clusters
@@ -33,6 +33,7 @@ def train(
     Trains all the trainable blocks in the model using the config provided.
     """
     docs = load_spacy_data('train.spacy')
+    docs = docs[:100]
     coref_optimizer = Tadam(config.learning_rate)
     span_optimizer = Tadam(config.learning_rate)
     docs_ids = list(range(len(docs)))
@@ -119,27 +120,34 @@ def evaluate(
     word_level_conll: bool = False
 ) -> Tuple[float, Tuple[float, float, float]]:
 
-    w_checker = ClusterChecker()
-    s_checker = ClusterChecker()
-    docs = get_docs(config.__dict__[f"{data_split}_data"],
-                    config.bert_model)
     encoder = spaCyRoBERTa()
     encoder.initialize()
-    spacy_docs = load_spacy_data('dev.spacy')
+    docs = load_spacy_data('dev.spacy')
+    n_docs = len(docs)
     running_loss = 0.0
+    w_checker = ClusterChecker()
+    s_checker = ClusterChecker()
+    muc_evaluator = Evaluator(muc)
+    bcubed_evaluator = Evaluator(b_cubed)
+    ceafe_evaluator = Evaluator(ceafe)
+    lea_evaluator = Evaluator(lea)
     s_correct = 0
     s_total = 0
+    muc_score = 0.
+    bcubed_score = 0.
+    ceafe_score = 0.
+    lea_score = 0.
 
     with conll.open_(config, model.attrs['epochs_trained'], data_split) \
             as (gold_f, pred_f):
         pbar = tqdm.tqdm(docs, unit="docs", ncols=0)
         for i, doc in enumerate(pbar):
-            spacy_doc = spacy_docs[i]
+            doc = docs[i]
             sent_ids, cluster_ids, heads, starts, ends = doc2tensors(
                 model.ops.xp,
-                spacy_doc
+                doc
             )
-            word_features, _ = encoder([spacy_doc], False)
+            word_features, _ = encoder([doc], False)
             # Get data for SpanPredictor
             # Run CorefScorer
             coref_scores, top_indices = model.predict(word_features[0])
@@ -178,23 +186,35 @@ def evaluate(
             if word_level_conll:
                 conll.write_conll(doc,
                                   [[(i, i + 1) for i in cluster]
-                                   for cluster in spacy_doc["word_clusters"]],
+                                   for cluster in doc._.word_clusters],
                                   gold_f)
                 conll.write_conll(doc,
                                   [[(i, i + 1) for i in cluster]
-                                   for cluster in word_clusters],
+                                   for cluster in doc._.word_clusters],
                                   pred_f)
             else:
-                conll.write_conll(doc, doc["span_clusters"], gold_f)
+                conll.write_conll(doc, doc._.coref_clusters, gold_f)
                 conll.write_conll(doc, span_clusters, pred_f)
 
-            w_checker.add_predictions(spacy_doc._.word_clusters, word_clusters)
+            w_checker.add_predictions(doc._.word_clusters, word_clusters)
             w_lea = w_checker.total_lea
 
-            s_checker.add_predictions(spacy_doc._.coref_clusters, span_clusters)
+            s_checker.add_predictions(doc._.coref_clusters, span_clusters)
             s_lea = s_checker.total_lea
 
-
+            cluster_info = get_cluster_info(
+                span_clusters,
+                doc._.coref_clusters
+            )
+            muc_evaluator.update(cluster_info)
+            bcubed_evaluator.update(cluster_info)
+            ceafe_evaluator.update(cluster_info)
+            lea_evaluator.update(cluster_info)
+            muc_score += muc_evaluator.get_f1()
+            bcubed_score += bcubed_evaluator.get_f1()
+            ceafe_score += ceafe_evaluator.get_f1()
+            lea_score += lea_evaluator.get_f1()
+            
             pbar.set_description(
                 f"{data_split}:"
                 f" | WL: "
@@ -209,6 +229,11 @@ def evaluate(
                 f" r: {s_lea[2]:<.5f}"
             )
         print()
+    print("LEA", s_lea[0])
+    print("Paul LEA", lea_score/n_docs)
+    print("MUC", muc_score/n_docs)
+    print("CEAFE", ceafe_score/n_docs)
+    print("BCUB", bcubed_score/n_docs)
     eval_score = w_lea[0] + s_lea[0]
     return eval_score
 
