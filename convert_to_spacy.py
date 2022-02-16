@@ -12,6 +12,7 @@ import spacy
 from collections import defaultdict
 from typing import List, Dict, Tuple
 from spacy.tokens import Doc, Token, Span, SpanGroup, DocBin
+from spacy.training import Example
 
 
 DATA_DIR = "."
@@ -36,7 +37,7 @@ def _get_word_clusters(doc: Doc):
     return word_clusters_list
 
 
-def _get_span_clusters(doc: Doc):
+def _get_span_clusters(doc: Doc) -> List[List[Tuple[int, int]]]:
     """Group spans into mention clusters."""
     span_clusters_dict: Dict[int, List[Tuple[int, int]]] = defaultdict(list)
     span_clusters_list: List[List[Tuple[int, int]]] = []
@@ -62,24 +63,6 @@ def _get_cluster_id(token: Token):
         return cluster_id + 1
     else:
         return 0
-
-
-def head2span(doc: Doc):
-    """
-    Convert head of a mention-span to the span.
-    """
-    headmap = []
-    for i, cluster in enumerate(doc._.coref_word_clusters):
-        for j, token_position in enumerate(cluster):
-            mention_span = doc._.coref_span_clusters[i][j]
-            headmap.append(
-                [
-                    token_position,
-                    mention_span.start,
-                    mention_span.end
-                ]
-            )
-    return headmap
 
 
 def _sentids_to_sentstarts(
