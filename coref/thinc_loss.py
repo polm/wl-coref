@@ -2,8 +2,6 @@ from typing import Tuple, List
 from thinc.types import Ints1d, Ints2d, Floats2d, Floats3d, FloatsXd
 from thinc.api import Model
 from thinc.util import to_categorical
-import coref.const as const
-from coref.utils import add_dummy, GraphNode
 
 
 def add_dummy(xp, tensor: FloatsXd) -> FloatsXd:

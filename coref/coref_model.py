@@ -3,10 +3,8 @@ from typing import List, Tuple
 import torch
 
 from coref.anaphoricity_scorer import AnaphoricityScorer
-from coref.const import Doc
 from coref.pairwise_encoder import DistancePairwiseEncoder
 from coref.rough_scorer import RoughScorer
-from coref.span_predictor import SpanPredictor
 
 
 class CorefScorer(torch.nn.Module):
@@ -97,7 +95,7 @@ class CorefScorer(torch.nn.Module):
         top_rough_scores, top_indices = self.rough_scorer(words)
         # Get pairwise features [n_words, n_ants, n_pw_features]
         pw = self.pw(top_indices)
-        batch_size = self.batch_size 
+        batch_size = self.batch_size
         a_scores_lst: List[torch.Tensor] = []
 
         for i in range(0, len(words), batch_size):

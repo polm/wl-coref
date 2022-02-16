@@ -33,7 +33,6 @@ def train(
     Trains all the trainable blocks in the model using the config provided.
     """
     docs = load_spacy_data('train.spacy')
-    docs = docs[:100]
     coref_optimizer = Tadam(config.learning_rate)
     span_optimizer = Tadam(config.learning_rate)
     docs_ids = list(range(len(docs)))

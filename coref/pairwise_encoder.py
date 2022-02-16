@@ -4,11 +4,9 @@ distance between the mentions, same/different speaker into feature embeddings
 
 import torch
 
-from coref.const import Doc
-
 
 class DistancePairwiseEncoder(torch.nn.Module):
-    
+
     def __init__(self, embedding_size, dropout_rate):
         super().__init__()
         emb_size = embedding_size
@@ -21,7 +19,7 @@ class DistancePairwiseEncoder(torch.nn.Module):
         """ A workaround to get current device (which is assumed to be the
         device of the first parameter of one of the submodules) """
         return next(self.distance_emb.parameters()).device
-    
+
 
     def forward(self,  # type: ignore  # pylint: disable=arguments-differ  #35566 in pytorch
                 top_indices: torch.Tensor
