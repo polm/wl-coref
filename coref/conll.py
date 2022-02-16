@@ -17,10 +17,10 @@ def write_conll(doc: Doc,
     """ Writes span/cluster information to f_obj, which is assumed to be a file
     object open for writing """
     placeholder = "  -" * 7
-    doc_id = doc["document_id"]
-    words = doc["cased_words"]
-    part_id = doc["part_id"]
-    sents = doc["sent_id"]
+    doc_id = doc._.document_id
+    words = [token.text for token in doc]
+    part_id = doc._.part_id
+    sents = [token._.sent_i for token in doc]
 
     max_word_len = max(len(w) for w in words)
 
