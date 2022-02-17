@@ -10,7 +10,6 @@ import time
 import numpy as np  # type: ignore
 import torch        # type: ignore
 
-from coref import conll
 from coref.cluster_checker import ClusterChecker
 from coval import Evaluator, get_cluster_info, b_cubed, muc, ceafe, lea
 from thinc.api import require_gpu
@@ -137,97 +136,80 @@ def evaluate(
     ceafe_score = 0.
     lea_score = 0.
 
-    with conll.open_(config, model.attrs['epochs_trained'], data_split) \
-            as (gold_f, pred_f):
-        pbar = tqdm.tqdm(docs, unit="docs", ncols=0)
-        for i, doc in enumerate(pbar):
-            doc = docs[i]
-            sent_ids, cluster_ids, heads, starts, ends = doc2tensors(
-                model.ops.xp,
-                doc
-            )
-            word_features, _ = encoder([doc], False)
-            # Get data for SpanPredictor
-            # Run CorefScorer
-            coref_scores, top_indices = model.predict(word_features[0])
-            # Compute coreference loss
-            c_loss, c_grads = coref_loss(
-                model,
-                cluster_ids,
-                coref_scores,
-                top_indices
-            )
-            word_clusters = _clusterize(
-                 span_predictor,
-                 coref_scores,
-                 top_indices
-             )
-            running_loss += c_loss
-            if starts.size and ends.size:
-                span_scores = span_predictor.predict(
-                    (
-                        sent_ids,
-                        word_features[0],
-                        heads
-                    )
-                )
-                span_clusters = predict_span_clusters(
-                    span_predictor,
+    pbar = tqdm.tqdm(docs, unit="docs", ncols=0)
+    for i, doc in enumerate(pbar):
+        doc = docs[i]
+        sent_ids, cluster_ids, heads, starts, ends = doc2tensors(
+            model.ops.xp,
+            doc
+        )
+        word_features, _ = encoder([doc], False)
+        # Get data for SpanPredictor
+        # Run CorefScorer
+        coref_scores, top_indices = model.predict(word_features[0])
+        # Compute coreference loss
+        c_loss, c_grads = coref_loss(
+            model,
+            cluster_ids,
+            coref_scores,
+            top_indices
+        )
+        word_clusters = _clusterize(
+             span_predictor,
+             coref_scores,
+             top_indices
+         )
+        running_loss += c_loss
+        if starts.size and ends.size:
+            span_scores = span_predictor.predict(
+                (
                     sent_ids,
                     word_features[0],
-                    word_clusters
+                    heads
                 )
-                pred_starts = span_scores[:, :, 0].argmax(axis=1)
-                pred_ends = span_scores[:, :, 1].argmax(axis=1)
-                s_correct += ((starts == pred_starts) * (ends == pred_ends)).sum()
-                s_total += len(pred_starts)
-
-            if word_level_conll:
-                conll.write_conll(doc,
-                                  [[(i, i + 1) for i in cluster]
-                                   for cluster in doc._.word_clusters],
-                                  gold_f)
-                conll.write_conll(doc,
-                                  [[(i, i + 1) for i in cluster]
-                                   for cluster in doc._.word_clusters],
-                                  pred_f)
-            else:
-                conll.write_conll(doc, doc._.coref_clusters, gold_f)
-                conll.write_conll(doc, span_clusters, pred_f)
-
-            w_checker.add_predictions(doc._.word_clusters, word_clusters)
-            w_lea = w_checker.total_lea
-
-            s_checker.add_predictions(doc._.coref_clusters, span_clusters)
-            s_lea = s_checker.total_lea
-
-            cluster_info = get_cluster_info(
-                span_clusters,
-                doc._.coref_clusters
             )
-            muc_evaluator.update(cluster_info)
-            bcubed_evaluator.update(cluster_info)
-            ceafe_evaluator.update(cluster_info)
-            lea_evaluator.update(cluster_info)
-            muc_score += muc_evaluator.get_f1()
-            bcubed_score += bcubed_evaluator.get_f1()
-            ceafe_score += ceafe_evaluator.get_f1()
-            lea_score += lea_evaluator.get_f1()
-            
-            pbar.set_description(
-                f"{data_split}:"
-                f" | WL: "
-                f" loss: {running_loss / (pbar.n + 1):<.5f},"
-                f" f1: {w_lea[0]:.5f},"
-                f" p: {w_lea[1]:.5f},"
-                f" r: {w_lea[2]:<.5f}"
-                f" | SL: "
-                f" sa: {s_correct / s_total:<.5f},"
-                f" f1: {s_lea[0]:.5f},"
-                f" p: {s_lea[1]:.5f},"
-                f" r: {s_lea[2]:<.5f}"
+            span_clusters = predict_span_clusters(
+                span_predictor,
+                sent_ids,
+                word_features[0],
+                word_clusters
             )
-        print()
+            pred_starts = span_scores[:, :, 0].argmax(axis=1)
+            pred_ends = span_scores[:, :, 1].argmax(axis=1)
+            s_correct += ((starts == pred_starts) * (ends == pred_ends)).sum()
+            s_total += len(pred_starts)
+
+        w_checker.add_predictions(doc._.word_clusters, word_clusters)
+        w_lea = w_checker.total_lea
+        s_checker.add_predictions(doc._.coref_clusters, span_clusters)
+        s_lea = s_checker.total_lea
+
+        cluster_info = get_cluster_info(
+            span_clusters,
+            doc._.coref_clusters
+        )
+        muc_evaluator.update(cluster_info)
+        bcubed_evaluator.update(cluster_info)
+        ceafe_evaluator.update(cluster_info)
+        lea_evaluator.update(cluster_info)
+        muc_score += muc_evaluator.get_f1()
+        bcubed_score += bcubed_evaluator.get_f1()
+        ceafe_score += ceafe_evaluator.get_f1()
+        lea_score += lea_evaluator.get_f1()
+
+        pbar.set_description(
+            f"{data_split}:"
+            f" | WL: "
+            f" loss: {running_loss / (pbar.n + 1):<.5f},"
+            f" f1: {w_lea[0]:.5f},"
+            f" p: {w_lea[1]:.5f},"
+            f" r: {w_lea[2]:<.5f}"
+            f" | SL: "
+            f" sa: {s_correct / s_total:<.5f},"
+            f" f1: {s_lea[0]:.5f},"
+            f" p: {s_lea[1]:.5f},"
+            f" r: {s_lea[2]:<.5f}"
+        )
     print("LEA", s_lea[0])
     print("Paul LEA", lea_score/n_docs)
     print("MUC", muc_score/n_docs)
