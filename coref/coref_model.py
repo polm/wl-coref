@@ -55,11 +55,6 @@ class CorefScorer(torch.nn.Module):
             input_size=bert_emb,
             hidden_size=bert_emb,
             batch_first=True,
-            bidirectional=True
-        )
-        self.bottleneck = torch.nn.Linear(
-            hidden_size * 2,
-            hidden_size
         )
         self.dropout = torch.nn.Dropout(dropout_rate)
         self.rough_scorer = RoughScorer(
@@ -87,7 +82,6 @@ class CorefScorer(torch.nn.Module):
         word_features = torch.unsqueeze(word_features, dim=0)
         words, _ = self.lstm(word_features)
         words = words.squeeze()
-        words = self.bottleneck(words)
         words = self.dropout(words)
         # Obtain bilinear scores and leave only top-k antecedents for each word
         # top_rough_scores  [n_words, n_ants]
