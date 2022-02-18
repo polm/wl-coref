@@ -2,8 +2,6 @@
 head word and context embeddings.
 """
 
-from typing import List, Optional, Tuple
-from coref.const import Doc, Span
 import torch
 
 

@@ -14,7 +14,7 @@ from coref.cluster_checker import ClusterChecker
 from coval import Evaluator, get_cluster_info, b_cubed, muc, ceafe, lea
 from thinc.api import require_gpu
 from thinc.api import Adam as Tadam
-from coref.spacy_util import _load_config
+from coref.utils import _load_config
 from coref.thinc_funcs import configure_pytorch_modules, doc2tensors
 from coref.thinc_funcs import spaCyRoBERTa
 from coref.thinc_funcs import _clusterize, predict_span_clusters

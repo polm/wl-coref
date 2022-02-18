@@ -1,14 +1,12 @@
 import os
 import spacy
-import torch
 
 from datetime import datetime
-from typing import Tuple, List, Set
+from typing import Tuple, List
 
 from thinc.types import Floats2d, Ints1d, Ints2d
 from thinc.util import xp2torch, torch2xp
-from coref import const
-from thinc.api import PyTorchWrapper, Model, reduce_mean, chain, tuplify
+from thinc.api import PyTorchWrapper, Model, reduce_mean
 from thinc.api import ArgsKwargs
 from spacy_transformers.architectures import transformer_tok2vec_v3
 from spacy_transformers.span_getters import configure_strided_spans
@@ -53,7 +51,7 @@ def convert_coref_scorer_outputs(
 
 def convert_span_predictor_inputs(
     model: Model,
-    X: Tuple[const.Doc, Floats2d, Ints1d],
+    X: Tuple[Ints1d, Floats2d, Ints1d],
     is_train: bool
 ):
     sent_id = xp2torch(X[0], requires_grad=False)
