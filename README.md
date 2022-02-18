@@ -1,6 +1,25 @@
 ## Word-Level Coreference Resolution
 
-This is a repository with the code to reproduce the experiments described in the paper of the same name, which was accepted to EMNLP 2021. The paper is available [here](https://aclanthology.org/2021.emnlp-main.605/).
+This is a repository with the code to reproduce the experiments described in the paper of the same name, which was accepted to EMNLP 2021. The paper is available [here](https://aclanthology.org/2021.emnlp-main.605/). It uses a slightly modified version of 
+https://github.com/polm/spacy-coref-scorer for scoring.
+
+The repo can be used almost the same way as the descriptions below says. 
+The additional step below is needed to convert the `jsonlines` to a `DocBin`:
+
+        python convert_to_spacy.py
+
+
+After data preparation the model can be train with 
+
+        python run.py train roberta
+
+Here `roberta` doesn't do anything its just the config system hasn't been modified yet.
+Evaluation is done with:
+
+        python run.py eval roberta --data-split test --coref-weights data/coref.pt --span-weights data/span.pt
+
+The weights are saved in the `data` folder. One must choose manually to run evaluation with the latest 
+weights (in the last epoch), because early-stopping kills it based on `LEA`. 
 
 ### Table of contents
 1. [Preparation](#preparation)
