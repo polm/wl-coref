@@ -5,18 +5,17 @@ to spacy.tokens.Doc
 """
 import os
 import logging
-import pickle
+import jsonlines
 import tqdm
 import spacy
 
 from collections import defaultdict
 from typing import List, Dict, Tuple
 from spacy.tokens import Doc, Token, Span, SpanGroup, DocBin
-from spacy.training import Example
 
 
 DATA_DIR = "."
-FILENAME = "roberta-large_english_{}_head.jsonlines.pickle"
+FILENAME = "data/english_{}_head.jsonlines"
 LOGGING_LEVEL = logging.WARNING  # DEBUG to output all duplicate spans
 SPLITS = ("development", "test", "train")
 nlp = spacy.blank("en")
@@ -115,8 +114,8 @@ if __name__ == "__main__":
     logging.basicConfig(level=LOGGING_LEVEL)
     path = os.path.join(DATA_DIR, FILENAME)
     for split in SPLITS:
-        with open(path.format(split, ""), mode="rb") as f:
-            inf = pickle.load(f)
+        with jsonlines.open(path.format(split, ""), mode='r') as inf:
+            # inf = pickle.load(f)
             doc_bin = DocBin(store_user_data=True)
             for doc in tqdm.tqdm(inf):
                 sent_starts = _sentids_to_sentstarts(doc['sent_id'])
