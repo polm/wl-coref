@@ -122,7 +122,7 @@ def configure_pytorch_modules(config):
     return coref_scorer, span_predictor
 
 
-def save_state(model, span_predictor, config):
+def save_state(model, span_predictor, optimizer, config):
     """Serialize CorefScorer and SpanPredictor."""
     time = datetime.strftime(datetime.now(), "%Y.%m.%d_%H.%M")
     span_path = os.path.join(
@@ -133,8 +133,10 @@ def save_state(model, span_predictor, config):
     coref_path = os.path.join(config.data_dir,
                         f"coref-{config.section}"
                         f"_(e{model.attrs['epochs_trained']}_{time}).pt")
-    model.to_disk(coref_path)
-    span_predictor.to_disk(span_path)
+    with model.use_params(optimizer.averages):
+        model.to_disk(coref_path)
+    with span_predictor.use_params(optimizer.averages):
+        span_predictor.to_disk(span_path)
 
 
 def load_state(

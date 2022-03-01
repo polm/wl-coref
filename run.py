@@ -13,7 +13,7 @@ import torch        # type: ignore
 from coref.cluster_checker import ClusterChecker
 from coval import Evaluator, get_cluster_info, b_cubed, muc, ceafe, lea
 from thinc.api import require_gpu
-from thinc.api import Adam as Tadam
+from thinc.api import Adam
 from coref.utils import _load_config
 from coref.thinc_funcs import configure_pytorch_modules, doc2tensors
 from coref.thinc_funcs import spaCyRoBERTa
@@ -32,8 +32,7 @@ def train(
     Trains all the trainable blocks in the model using the config provided.
     """
     docs = load_spacy_data('train.spacy')
-    coref_optimizer = Tadam(config.learning_rate)
-    span_optimizer = Tadam(config.learning_rate)
+    optimizer = Adam(config.learning_rate)
     docs_ids = list(range(len(docs)))
     best_val_score = 0
     encoder = spaCyRoBERTa()
@@ -65,7 +64,7 @@ def train(
             )
             # Update CorefScorer
             backprop(c_grads)
-            model.finish_update(coref_optimizer)
+            model.finish_update(optimizer)
             # Get data for SpanPredictor
             # (heads, starts, ends), _ = span_provider(doc, False)
             if starts.size and ends.size:
@@ -83,7 +82,7 @@ def train(
                     ends
                 )
                 backprop_span(s_grads)
-                span_predictor.finish_update(span_optimizer)
+                span_predictor.finish_update(optimizer)
                 del span_scores
             else:
                 s_loss = 0
@@ -106,7 +105,7 @@ def train(
         if val_score > best_val_score:
             best_val_score = val_score
             print("New best {}".format(best_val_score))
-            save_state(model, span_predictor, config)
+            save_state(model, span_predictor, optimizer, config)
 
 
 @torch.no_grad()
