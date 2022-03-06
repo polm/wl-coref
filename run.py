@@ -19,6 +19,7 @@ from coref.thinc_funcs import configure_pytorch_modules, doc2tensors
 from coref.thinc_funcs import spaCyRoBERTa
 from coref.thinc_funcs import _clusterize, predict_span_clusters
 from coref.thinc_funcs import load_state, save_state
+from coref.thinc_funcs import get_head2span
 from coref.thinc_loss import coref_loss, span_loss
 from convert_to_spacy import load_spacy_data
 
@@ -37,6 +38,7 @@ def train(
     best_val_score = 0
     encoder = spaCyRoBERTa()
     encoder.initialize()
+
 
     for epoch in range(model.attrs['epochs_trained'], config.train_epochs):
         running_c_loss = 0.0
@@ -95,7 +97,7 @@ def train(
 
             pbar.set_description(
                 f"Epoch {epoch + 1}:"
-                f" {doc._.document_id:26}"
+                #f" {doc._.document_id:26}"
                 f" c_loss: {running_c_loss / (pbar.n + 1):<.5f}"
                 f" s_loss: {running_s_loss / (pbar.n + 1):<.5f}"
             )
@@ -107,6 +109,59 @@ def train(
             print("New best {}".format(best_val_score))
             save_state(model, span_predictor, optimizer, config)
 
+def get_gold_word_clusters(doc):
+    """Return world-level clusters as a list of lists of token indices."""
+    clusters = []
+    for key, sg in doc.spans.items():
+        if not key.startswith("coref_word_clusters_"):
+            continue
+
+        # it's a group of spans, but each span is just one token
+        cluster = [span[0].i for span in sg]
+        clusters.append(cluster)
+    return clusters
+
+def get_gold_clusters(doc):
+    """Return clusters as list of span indices."""
+    clusters = []
+    for key, sg in doc.spans.items():
+        if not key.startswith("coref_clusters_"):
+            continue
+
+        cluster = [(span.start, span.end) for span in sg]
+        if len(cluster) == 0:
+            print("===== !!! empty cluster !!!! =====")
+        clusters.append(cluster)
+    return clusters
+
+def get_head2span(doc):
+    """Return head to span mapping.
+
+    Head to span mapping is a list up tuples of (head token index, span start,
+    span end).
+
+    This assumes that the order of word clusters and span clusters in the doc,
+    and the order of spans in those clusters, are aligned.
+    """
+    # XXX This doesn't actually work because of alignment issues.
+    # For now just assume we don't have this.
+    head_groups = [doc.spans[sk] for sk in doc.spans if sk.startswith("coref_word_clusters")]
+    heads = []
+    for group in head_groups:
+        for span in group:
+            # note this are all one-token spans
+            heads.append(span[0].i)
+
+    spans = []
+    groups = [doc.spans[sk] for sk in doc.spans if sk.startswith("coref_clusters")]
+    for group in groups:
+        for ss in group:
+            spans.append( (ss.start, ss.end) )
+
+    out = []
+    for head, (start, end) in zip(heads, spans):
+        out.append( (head, start, end) )
+    return out
 
 @torch.no_grad()
 def evaluate(
@@ -178,14 +233,16 @@ def evaluate(
             s_correct += ((starts == pred_starts) * (ends == pred_ends)).sum()
             s_total += len(pred_starts)
 
-        w_checker.add_predictions(doc._.word_clusters, word_clusters)
+        gold_word_clusters = get_gold_word_clusters(doc)
+        w_checker.add_predictions(gold_word_clusters, word_clusters)
         w_lea = w_checker.total_lea
-        s_checker.add_predictions(doc._.coref_clusters, span_clusters)
+        gold_clusters = get_gold_clusters(doc)
+        s_checker.add_predictions(gold_clusters, span_clusters)
         s_lea = s_checker.total_lea
 
         cluster_info = get_cluster_info(
             span_clusters,
-            doc._.coref_clusters
+            gold_clusters
         )
         muc_evaluator.update(cluster_info)
         bcubed_evaluator.update(cluster_info)

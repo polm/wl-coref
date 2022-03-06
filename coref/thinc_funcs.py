@@ -73,14 +73,48 @@ def spaCyRoBERTa(
 
 
 
+def get_sent_ids(doc):
+    sid = 0
+    sids = []
+    for sent in doc.sents:
+        for tok in sent:
+            sids.append(sid)
+        sid += 1
+    return sids
+
+def get_cluster_ids(doc):
+    """Get the cluster ids of head tokens."""
+
+    out = [0] * len(doc)
+    head_spangroups = [doc.spans[sk] for sk in doc.spans if sk.startswith("coref_word_clusters")]
+    for ii, group in enumerate(head_spangroups, start=1):
+        for span in group:
+            out[span[0].i] = ii
+
+    return out
+
+def get_head2span(doc):
+    out = []
+    for sk in doc.spans:
+        if not sk.startswith("coref_clusters"):
+            continue
+
+        if len(doc.spans[sk]) == 1:
+            print("===== UNARY MENTION ====")
+
+        for span in doc.spans[sk]:
+            out.append( (span.root.i, span.start, span.end) )
+    return out
+
 
 def doc2tensors(
     xp,
     doc: spacy.tokens.Doc
 ) -> Tuple[Ints1d, Ints1d, Ints1d, Ints1d, Ints1d]:
-    sent_ids = [token._.sent_i for token in doc]
-    cluster_ids = [token._.cluster_id for token in doc]
-    head2span = sorted(doc._.coref_head2span)
+    sent_ids = get_sent_ids(doc)
+    cluster_ids = get_cluster_ids(doc)
+    head2span = get_head2span(doc)
+
 
     if not head2span:
         heads, starts, ends = [], [], []
